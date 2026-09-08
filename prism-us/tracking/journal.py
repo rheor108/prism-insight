@@ -122,7 +122,8 @@ class USJournalManager:
             )
             create_trading_journal_agent = _journal_module.create_trading_journal_agent
             from mcp_agent.workflows.llm.augmented_llm import RequestParams
-            from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+            from cores.llm.subscription_llm import llm_for
+            OpenAIAugmentedLLM = llm_for('journal')
 
             ticker = stock_data.get('ticker', '')
             company_name = stock_data.get('company_name', '')

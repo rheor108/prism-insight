@@ -85,7 +85,7 @@ async def check_render(image_path: str) -> RenderQAVerdict | None:
         return None
 
     try:
-        result = await analyze_image(image_path, _QA_PROMPT, schema=RenderQAVerdict)
+        result = await analyze_image(image_path, _QA_PROMPT, schema=RenderQAVerdict, stage="render_qa")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[RENDER_QA] error during analyze_image: %s", exc)
         return None

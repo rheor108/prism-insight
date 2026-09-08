@@ -7,48 +7,40 @@ sys.modules.setdefault("markdown", types.SimpleNamespace(markdown=lambda text: t
 
 import report_generator
 from cores.agents.report_agent import ReportAgent
-from cores.llm.ports import LLMResult
+from prism_core import codex_subscription
+import pytest
+from unittest.mock import AsyncMock
 
 
-class RecordingBackend:
-    def __init__(self):
-        self.calls = []
-
-    async def run(self, spec, user_input):
-        self.calls.append((spec, user_input))
-        return LLMResult(text="backend-result")
-
-
-def test_generate_telegram_text_preserves_runtime_contract(monkeypatch):
-    backend = RecordingBackend()
-    monkeypatch.setattr(report_generator, "_telegram_backend", backend)
-    monkeypatch.setattr(report_generator, "TELEGRAM_ANALYSIS_MODEL", "test-model")
-    monkeypatch.setattr(report_generator, "TELEGRAM_ANALYSIS_EFFORT", "high")
-    agent = ReportAgent(
-        name="contract-agent",
-        instruction="contract instructions",
-        server_names=("perplexity", "time"),
-    )
-
-    result = asyncio.run(
-        report_generator._generate_telegram_text(
-            agent=agent,
-            message="contract message",
-            max_tokens=4321,
-        )
-    )
-
+@pytest.mark.parametrize("name,stage", [
+    ("evaluation_agent", "consultation"), ("us_evaluation_agent", "consultation"),
+    ("evaluation_fallback_agent", "consultation"), ("followup_agent", "followup"),
+    ("us_followup_agent", "followup"), ("journal_conversation_agent", "journal_chat"),
+    ("firecrawl_search_analyst", "search_analysis"), ("firecrawl_followup_agent", "search_analysis"),
+])
+def test_generate_telegram_text_preserves_runtime_contract(monkeypatch, name, stage):
+    mock = AsyncMock(return_value="backend-result")
+    monkeypatch.setattr(codex_subscription, "run_with_registry", mock)
+    agent = ReportAgent(name=name, instruction="contract instructions", server_names=("perplexity", "time"))
+    result = asyncio.run(report_generator._generate_telegram_text(
+        agent=agent, message="contract message", max_tokens=4321))
     assert result == "backend-result"
-    spec, user_input = backend.calls[0]
-    assert spec.name == "contract-agent"
-    assert spec.instructions == "contract instructions"
-    assert spec.model == "test-model"
-    assert spec.mcp_servers == ("perplexity", "time")
-    assert spec.params.max_tokens == 4321
-    assert spec.params.reasoning_effort == "high"
-    assert spec.params.parallel_tool_calls is True
-    assert spec.params.max_iterations == 10
-    assert user_input == "contract message"
+    mock.assert_awaited_once_with(stage, agent.instruction, "contract message", agent.server_names)
+
+
+def test_consultation_timeout_is_preserved(monkeypatch):
+    cancelled = []
+    async def never(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+    monkeypatch.setattr(codex_subscription, "run_with_registry", never)
+    with pytest.raises(TimeoutError):
+        asyncio.run(report_generator._generate_telegram_text(
+            agent=ReportAgent("evaluation_agent", "prompt"), message="q", max_tokens=100,
+            timeout_seconds=0.01))
+    assert cancelled == [True]
 
 
 def test_telegram_runtime_sources_are_mcp_agent_free():

@@ -372,38 +372,14 @@ def _extract_agent_text(result) -> Optional[str]:
     return None
 
 
-def firecrawl_agent(prompt: str, max_credits: int = 200, model: Literal["spark-1-mini", "spark-1-pro"] = "spark-1-mini") -> Optional[str]:
-    """
-    Run Firecrawl agent (Spark) with a prompt.
-
-    Args:
-        prompt: Natural language prompt for the agent
-        max_credits: Maximum credits to spend (default 200)
-        model: Agent model to use (default "spark-1-mini")
-
-    Returns:
-        Agent response text, or None on error
-    """
+def firecrawl_agent(prompt: str, max_credits: int = 200, model: str = 'spark-1-mini') -> Optional[str]:
+    """Research with stage 32 Codex web search. Legacy Spark args do not select a paid model."""
+    import asyncio
+    from prism_core.codex_subscription import run_stage
     try:
-        app = get_firecrawl_app()
-        result = app.agent(
-            prompt=prompt,
-            model=model,
-            max_credits=max_credits,
-        )
-        # Debug: log raw result structure
-        logger.info(f"Firecrawl agent raw result type: {type(result)}")
-        if result:
-            logger.info(f"Firecrawl agent result attrs: {[a for a in dir(result) if not a.startswith('_')]}")
-
-        # Extract text from result — try multiple response formats
-        text = _extract_agent_text(result)
-        if text:
-            logger.info(f"Firecrawl agent response: {len(text)} chars")
-            return text
-
-        logger.warning(f"Firecrawl agent returned empty result. Raw: {str(result)[:500]}")
-        return None
-    except Exception as e:
-        logger.error(f"Firecrawl agent failed: {e}")
+        return asyncio.run(run_stage('research',
+            'Research using web search. Cite dated source URLs and distinguish facts from inference.',
+            prompt,web_search=True))
+    except Exception as error:
+        logger.warning('Subscription research failed: %s',type(error).__name__)
         return None

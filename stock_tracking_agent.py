@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 # MCP related imports
 from mcp_agent.app import MCPApp
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
-from cores.llm.openai_responses_llm import OpenAIResponsesLLM as OpenAIAugmentedLLM
+from cores.llm.subscription_llm import llm_for
+OpenAIAugmentedLLM = llm_for('kr_buy')
 from cores.llm.codex_oauth_fast_backend import generate_codex_fast
 
 # Core agent imports
@@ -1035,9 +1036,7 @@ class StockTrackingAgent:
                 """
 
             scenario_json = None
-            codex_enabled = os.environ.get(
-                "PRISM_KR_CODEX_FAST_TRADING", "0"
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_enabled = False  # Replaced by stage-based subscription backend
             if codex_enabled:
                 try:
                     instruction = str(

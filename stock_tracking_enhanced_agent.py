@@ -19,7 +19,8 @@ import traceback
 
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
 from cores.llm.codex_oauth_fast_backend import generate_codex_fast
-from cores.llm.openai_responses_llm import OpenAIResponsesLLM as OpenAIAugmentedLLM
+from cores.llm.subscription_llm import llm_for
+OpenAIAugmentedLLM = llm_for('kr_sell')
 
 # Import core agents
 from cores.agents.trading_agents import create_sell_decision_agent
@@ -1482,10 +1483,7 @@ class EnhancedStockTrackingAgent(StockTrackingAgent):
                 """
 
             response = None
-            codex_sell_enabled = os.environ.get(
-                "PRISM_KR_CODEX_FAST_SELL",
-                os.environ.get("PRISM_KR_CODEX_FAST_TRADING", "0"),
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_sell_enabled = False  # Replaced by stage-based subscription backend
             if codex_sell_enabled:
                 try:
                     instruction = str(

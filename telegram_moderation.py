@@ -850,23 +850,8 @@ class CommunityModerator:
             return None
         client = None
         try:
-            from openai import AsyncOpenAI
-
-            from cores.llm.capabilities import resolve_openai_api_key
-
-            api_key = resolve_openai_api_key()
-            if not api_key:
-                logger.info("moderation LLM skipped: no OpenAI key")
-                return None
-            kwargs: dict[str, Any] = {"api_key": api_key, "timeout": 10.0}
-            if os.getenv("PRISM_OPENAI_AUTH_MODE", "api_key") == "chatgpt_oauth":
-                try:
-                    from cores.chatgpt_proxy.constants import CHATGPT_BASE_URL
-
-                    kwargs["base_url"] = CHATGPT_BASE_URL
-                except ImportError:
-                    pass
-            client = AsyncOpenAI(**kwargs)
+            from prism_core.codex_subscription import SubscriptionChatClient
+            client = SubscriptionChatClient('moderation')
             system = (
                 "당신은 한국어 공개 투자 토론방의 안전 검토기입니다. "
                 "정치성향, 나이, 이름, 말투만으로 위험하다고 추정하지 말고 "

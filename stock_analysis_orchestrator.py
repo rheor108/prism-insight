@@ -366,7 +366,8 @@ class StockAnalysisOrchestrator:
 
             # Step 2: Run LLM agent with perplexity for qualitative analysis
             from mcp_agent.app import MCPApp
-            from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+            from cores.llm.subscription_llm import llm_for
+            OpenAIAugmentedLLM = llm_for('macro')
             from cores.agents.macro_intelligence_agent import create_macro_intelligence_agent
 
             macro_app = MCPApp(name="macro_intelligence")
@@ -1578,17 +1579,7 @@ async def main():
 
     # ChatGPT OAuth proxy setup
     proxy_started = False
-    if not args.no_proxy and os.getenv("PRISM_OPENAI_AUTH_MODE") == "chatgpt_oauth":
-        try:
-            from cores.chatgpt_proxy import inject_env, start_proxy, stop_proxy
-            inject_env()
-            proxy_started = await start_proxy()
-            if not proxy_started:
-                logger.warning("ChatGPT OAuth proxy failed to start, falling back to standard API")
-                from cores.chatgpt_proxy import clear_env
-                clear_env()
-        except Exception as e:
-            logger.warning("ChatGPT OAuth proxy setup error: %s, falling back to standard API", e)
+    logger.info("AI provider: Codex subscription; no API fallback")
 
     orchestrator = StockAnalysisOrchestrator(telegram_config=telegram_config)
 

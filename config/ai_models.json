@@ -1,0 +1,306 @@
+{
+  "provider": "codex_subscription",
+  "stages": {
+    "macro": {
+      "number": 1,
+      "label": "거시경제·시장 이슈",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "price_volume": {
+      "number": 2,
+      "label": "주가·거래량",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "holdings_flow": {
+      "number": 3,
+      "label": "수급·기관 보유",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "financials": {
+      "number": 4,
+      "label": "재무·실적·밸류에이션",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "company": {
+      "number": 5,
+      "label": "기업 개요·경쟁력",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "news": {
+      "number": 6,
+      "label": "뉴스·이벤트",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "market": {
+      "number": 7,
+      "label": "시장지수",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "strategy": {
+      "number": 8,
+      "label": "종합 투자 전략",
+      "enabled": true,
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "report_summary": {
+      "number": 9,
+      "label": "보고서 요약",
+      "enabled": true,
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "kr_buy": {
+      "number": 10,
+      "label": "국내 매수",
+      "enabled": true,
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "us_buy": {
+      "number": 11,
+      "label": "미국 매수",
+      "enabled": true,
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "kr_sell": {
+      "number": 12,
+      "label": "국내 보유·매도",
+      "enabled": true,
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "us_sell": {
+      "number": 13,
+      "label": "미국 보유·매도",
+      "enabled": true,
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "telegram_summary": {
+      "number": 14,
+      "label": "알림 요약",
+      "enabled": true,
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "telegram_evaluator": {
+      "number": 15,
+      "label": "알림 품질 평가",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "journal": {
+      "number": 16,
+      "label": "매매 회고",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "memory_summary": {
+      "number": 17,
+      "label": "회고 압축",
+      "enabled": true,
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "memory_intuition": {
+      "number": 18,
+      "label": "장기 기억·직관",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "intuition_refresh": {
+      "number": 19,
+      "label": "직관 갱신",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "translation": {
+      "number": 20,
+      "label": "다국어 번역",
+      "enabled": true,
+      "model": "gpt-5.6-luna",
+      "effort": "low",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "company_translation": {
+      "number": 21,
+      "label": "기업명 번역",
+      "enabled": true,
+      "model": "gpt-5.6-luna",
+      "effort": "low",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "consultation": {
+      "number": 22,
+      "label": "보유 진단·상담",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "followup": {
+      "number": 23,
+      "label": "분석 후속 질문",
+      "enabled": true,
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "journal_chat": {
+      "number": 24,
+      "label": "회고 대화",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "search_analysis": {
+      "number": 25,
+      "label": "검색 결과 분석",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "moderation": {
+      "number": 26,
+      "label": "메시지 관리",
+      "enabled": true,
+      "model": "gpt-5.4-mini",
+      "effort": "low",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "archive_query": {
+      "number": 27,
+      "label": "아카이브 질의",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "archive_insight": {
+      "number": 28,
+      "label": "아카이브 인사이트",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "vision": {
+      "number": 29,
+      "label": "차트 이미지 해석",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "render_qa": {
+      "number": 30,
+      "label": "차트 시각 검사",
+      "enabled": true,
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "embedding": {
+      "number": 31,
+      "label": "의미 검색 임베딩",
+      "enabled": false,
+      "model": null,
+      "effort": null,
+      "timeout_seconds": 300,
+      "max_tool_rounds": 8
+    },
+    "research": {
+      "number": 32,
+      "label": "외부 자료 조사",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20
+    },
+    "video": {
+      "number": 33,
+      "label": "영상 전사문 분석",
+      "enabled": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "timeout_seconds": 600,
+      "max_tool_rounds": 20,
+      "filter": {
+        "model": "gpt-5.6-terra",
+        "effort": "medium"
+      }
+    }
+  }
+}

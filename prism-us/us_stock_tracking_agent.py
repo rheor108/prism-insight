@@ -117,7 +117,8 @@ _spec = _ilu.spec_from_file_location(
 assert _spec is not None and _spec.loader is not None
 _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-OpenAIAugmentedLLM = _mod.OpenAIResponsesLLM
+from cores.llm.subscription_llm import llm_for
+OpenAIAugmentedLLM = llm_for('us_buy')
 _codex_spec = _ilu.spec_from_file_location(
     "codex_oauth_fast_backend",
     Path(__file__).resolve().parent.parent / "cores" / "llm" / "codex_oauth_fast_backend.py",
@@ -1390,9 +1391,7 @@ class USStockTrackingAgent:
 
             ticker_tag = ticker or "?"
             scenario_json = None
-            codex_enabled = os.environ.get(
-                "PRISM_US_CODEX_FAST_TRADING", "0"
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_enabled = False  # Replaced by stage-based subscription backend
             if codex_enabled:
                 try:
                     instruction = str(
@@ -2327,10 +2326,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
 """
 
             response = None
-            codex_sell_enabled = os.environ.get(
-                "PRISM_US_CODEX_FAST_SELL",
-                os.environ.get("PRISM_US_CODEX_FAST_TRADING", "0"),
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_sell_enabled = False  # Replaced by stage-based subscription backend
             if codex_sell_enabled:
                 try:
                     instruction = str(
@@ -2376,7 +2372,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             if response is None:
                 async def _legacy_sell_response():
                     llm = await self.sell_decision_agent.attach_llm(
-                        OpenAIAugmentedLLM
+                        llm_for('us_sell')
                     )
                     return await llm.generate_str(
                         message=prompt_message,

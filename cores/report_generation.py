@@ -1,51 +1,16 @@
+from prism_core.ai_models import REPORT_STAGES
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from cores.agents.report_agent import ReportAgent
-from cores.llm.agent_bridge import ensure_openai_agents_configured
-from cores.llm.backends.openai_agents_backend import OpenAIAgentsBackend
-from cores.llm.config_loader import load_report_mcp_registry
-from cores.llm.ports import AgentSpec, LLMParams
 from report_model_config import REPORT_EFFORT, REPORT_MODEL
 from cores.openai_error_logging import log_openai_error
 
-# Report LLM model/effort are shared with macro, summaries and artifact names.
-# Long-form reports keep medium reasoning for cross-source reconciliation and
-# numeric strategy synthesis. Auxiliary report tasks use the separate low-effort
-# contract; the Responses API backend remains required for gpt-5.6 tool calls.
-
-_report_backend = None
+# Stage choices are resolved at each call from config/ai_models.json.
 
 
-def _get_report_backend():
-    """Lazily configure the SDK and native MCP registry for report calls."""
-    global _report_backend
-    if _report_backend is None:
-        ensure_openai_agents_configured()
-        _report_backend = OpenAIAgentsBackend(load_report_mcp_registry())
-    return _report_backend
+async def _generate_agent_text(agent, message, *, stage, max_tokens, max_iterations):
+    from prism_core.codex_subscription import run_with_registry
+    return await run_with_registry(stage, agent.instruction, message, agent.server_names)
 
-
-async def _generate_agent_text(
-    agent,
-    message: str,
-    *,
-    max_tokens: int,
-    max_iterations: int,
-) -> str:
-    """Run one SDK-neutral report definition through the shared LLM port."""
-    spec = AgentSpec(
-        name=agent.name,
-        instructions=agent.instruction,
-        model=REPORT_MODEL,
-        mcp_servers=tuple(agent.server_names),
-        params=LLMParams(
-            max_tokens=max_tokens,
-            reasoning_effort=REPORT_EFFORT,
-            parallel_tool_calls=True,
-            max_iterations=max_iterations,
-        ),
-    )
-    result = await _get_report_backend().run(spec, message)
-    return result.text
 
 
 # Language name mapping for report generation
@@ -146,6 +111,7 @@ async def generate_report(agent, section, company_name, company_code, reference_
         report = await _generate_agent_text(
             agent,
             message,
+            stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=10,
         )
@@ -234,6 +200,7 @@ async def generate_market_report(agent, section, reference_date, logger, languag
         report = await _generate_agent_text(
             agent,
             message,
+            stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=3,
         )
@@ -338,6 +305,7 @@ Comprehensive Analysis Report:
         executive_summary = await _generate_agent_text(
             summary_agent,
             message,
+            stage="report_summary",
             max_tokens=16000,
             max_iterations=2,
         )
@@ -566,6 +534,7 @@ Please present a consistent and executable investment strategy that investors ca
         investment_strategy = await _generate_agent_text(
             investment_strategy_agent,
             message,
+            stage="strategy",
             max_tokens=32000,
             max_iterations=3,
         )

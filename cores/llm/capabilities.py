@@ -107,23 +107,17 @@ def vision_in_report() -> bool:
 
 
 def vision_model() -> str:
-    """Return the vision model id (default: gpt-4o)."""
-    return os.environ.get("PRISM_VISION_MODEL", _DEFAULT_VISION_MODEL).strip() or _DEFAULT_VISION_MODEL
+    from prism_core.ai_models import settings
+    return settings('vision').model
 
 
 def vision_auth() -> str:
-    """Return the vision auth mode: 'api' (default) or 'oauth'."""
-    val = os.environ.get("PRISM_VISION_AUTH", "api").strip().lower()
-    return val if val in ("api", "oauth") else "api"
+    return 'codex_subscription'
 
 
 def vision_available() -> bool:
-    """Master gate: True iff vision is enabled AND a real API key exists.
-
-    Callers MUST check this before encoding images or making vision calls.
-    When False, skip entirely — no encoding, no client, no network.
-    """
-    return vision_enabled() and has_api_key()
+    from prism_core.ai_models import settings
+    return vision_enabled() and settings('vision').enabled
 
 
 def vision_buy_quality_active() -> bool:

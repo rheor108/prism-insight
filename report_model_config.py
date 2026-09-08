@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import re
+from prism_core.ai_models import settings
 
 
-REPORT_MODEL = os.environ.get("REPORT_MODEL", "gpt-5.6-luna")
-REPORT_EFFORT = os.environ.get("REPORT_EFFORT", "medium")
-REPORT_AUX_MODEL = os.environ.get("REPORT_AUX_MODEL", REPORT_MODEL)
-REPORT_AUX_EFFORT = os.environ.get("REPORT_AUX_EFFORT", "low")
+REPORT_MODEL = settings("price_volume").model
+REPORT_EFFORT = settings("price_volume").effort
+REPORT_AUX_MODEL = settings("telegram_summary").model
+REPORT_AUX_EFFORT = settings("telegram_summary").effort
 
 
 def report_model_slug(model: str | None = None) -> str:
