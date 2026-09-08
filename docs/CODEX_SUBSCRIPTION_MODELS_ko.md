@@ -3,6 +3,10 @@
 2026-09-09: 승인된 33단계 모델 배정을 새 fork에 반영했습니다.
 주식 KR/US 경로가 대상이며 별도 BTC 프로젝트는 이 구성에 포함하지 않습니다.
 
+운영 연결 검사에서 CLI 0.152.1은 Astra에 필요한 버전보다 낮아 0.153.4로
+업데이트했습니다. `gpt-5.4-mini`는 현재 ChatGPT 계정에서 지원되지 않아
+메시지 관리 단계만 실제 연결이 확인된 Luna/low로 변경했습니다.
+
 ## 모델 선택
 
 `config/ai_models.json`이 실제 호출의 모델·추론 수준을 결정합니다. 각 단계의
@@ -42,7 +46,7 @@ Codex Fast 매매 분기도 별도 모델을 선택하지 않습니다. 대시�
 | 23 | `followup` | 분석 후속 질문 | gpt-5.6-terra | high |
 | 24 | `journal_chat` | 회고 대화 | gpt-5.6-sol | high |
 | 25 | `search_analysis` | 검색 결과 분석 | gpt-5.6-sol | high |
-| 26 | `moderation` | 메시지 관리 | gpt-5.4-mini | low |
+| 26 | `moderation` | 메시지 관리 | gpt-5.6-luna | low |
 | 27 | `archive_query` | 아카이브 질의 | gpt-5.6-sol | high |
 | 28 | `archive_insight` | 아카이브 인사이트 | gpt-5.6-sol | high |
 | 29 | `vision` | 차트 이미지 해석 | gpt-5.6-sol | high |
