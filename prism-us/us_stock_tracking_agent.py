@@ -38,6 +38,7 @@ from typing import List, Dict, Any, Tuple, Optional
 # Add parent directory to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from prism_core.entry_costs import reconcile_agent_entry_costs, confirmed_cost
 from prism_core.execution_service import (  # noqa: E402
     ExecutionService,
     OrderOutcomeUnknown,
@@ -1802,7 +1803,7 @@ class USStockTrackingAgent:
                           f"Sector: {scenario.get('sector', 'Unknown')}\n"
             else:
                 message = f"📈 New Buy: {company_name}({ticker})\n" \
-                          f"Buy Price: ${current_price:,.2f}\n" \
+                          f"Analysis Price: ${current_price:,.2f} (fill cost checked next batch)\n" \
                           f"Target: ${target_price:,.2f}\n" \
                           f"Stop Loss: ${stop_loss:,.2f}\n" \
                           f"Period: {scenario.get('investment_period', 'short')}\n" \
@@ -3095,6 +3096,12 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                 return False
             # ─────────────────────────────────────────────────────────────────
 
+            # Batch reconciliation may have corrected the cost since this caller
+            # loaded its snapshot. History and journal use the locked live row.
+            from prism_core.entry_costs import refresh_sale_cost
+            buy_price = refresh_sale_cost(self.conn, "US", account_key,
+                                          legacy_holding_ids, stock_data)
+
             # Calculate profit rate
             profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
 
@@ -3235,6 +3242,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
         """
         try:
             logger.info("Starting US holdings update")
+            await reconcile_agent_entry_costs(self, "US")
 
             # 매도 판단에 쓸 '현재' 시장 레짐을 사이클당 1회 계산(OpenAI 무관).
             # _fallback_sell_decision 이 self._live_regime_cache 로 참조한다.
@@ -3244,9 +3252,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             # id included for pyramiding (#288): enables per-row delete and
             # fractional-sell quantity computation for multi-row tickers.
             self.cursor.execute(
-                """SELECT id, ticker, company_name, buy_price, buy_date, current_price,
-                   scenario, target_price, stop_loss, last_updated,
-                   trigger_type, trigger_mode, sector, account_key, account_name
+                """SELECT *
                    FROM us_stock_holdings
                    WHERE account_key = ?""",
                 (self._account_scope()[0],)
@@ -3271,6 +3277,10 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             fully_exited_tickers: set = set()
 
             for stock in holdings:
+                if (not confirmed_cost(stock) or stock.get('ticker') in
+                        getattr(self, '_entry_cost_unresolved', set())):
+                    logger.warning('[ENTRY_COST] decision deferred for %s: fill cost unconfirmed', stock.get('ticker'))
+                    continue
                 ticker = stock.get('ticker')
                 company_name = stock.get('company_name')
 
@@ -3573,8 +3583,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
         try:
             # Query holdings
             self.cursor.execute(
-                """SELECT ticker, company_name, buy_price, current_price, buy_date,
-                   scenario, target_price, stop_loss, sector
+                """SELECT *
                    FROM us_stock_holdings
                    WHERE account_key = ?""",
                 (self._account_scope()[0],)
@@ -3605,7 +3614,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                 for h in holdings:
                     buy_price = h.get('buy_price', 0)
                     current_price = h.get('current_price', 0)
-                    if buy_price > 0:
+                    if buy_price > 0 and confirmed_cost(h):
                         profit_rate = ((current_price - buy_price) / buy_price) * 100
                         profit_rates.append((h.get('ticker'), h.get('company_name'), profit_rate))
 
@@ -3624,6 +3633,9 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             if holdings and len(holdings) > 0:
                 message += "🔸 Holdings List:\n"
                 for stock in holdings:
+                    if not confirmed_cost(stock):
+                        message += f"- {stock.get('company_name')}({stock.get('ticker')}): 체결 원가 확인 대기 — 수익률 미산출\n"
+                        continue
                     ticker = stock.get('ticker', '')
                     company_name = stock.get('company_name', '')
                     buy_price = stock.get('buy_price', 0)

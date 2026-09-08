@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
 
 import asyncio
+from prism_core.entry_costs import reconcile_agent_entry_costs, confirmed_cost
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -1527,7 +1528,7 @@ class StockTrackingAgent:
 
         message = (
             f"📈 신규 매수: {company_name}({ticker})\n"
-            f"매수가: {current_price:,.0f}원\n"
+            f"분석 기준가: {current_price:,.0f}원 (체결 원가는 다음 배치에서 확인)\n"
             f"목표가: {scenario.get('target_price', 0):,.0f}원\n"
             f"손절가: {scenario.get('stop_loss', 0):,.0f}원\n"
             f"투자기간: {scenario.get('investment_period', '단기')}\n"
@@ -1995,6 +1996,8 @@ class StockTrackingAgent:
                 )
 
             live = dict(row)
+            if not confirmed_cost(live):
+                raise ValueError("KR exit requires a confirmed entry cost")
             legacy_holding_id = int(live["id"])
             position_id = legacy_position_id("KR", legacy_holding_id)
             sell_price = float(stock_data.get("current_price") or 0)
@@ -2559,7 +2562,7 @@ class StockTrackingAgent:
                           f"산업군: {scenario.get('sector', '알 수 없음')}\n"
             else:
                 message = f"📈 신규 매수: {company_name}({ticker})\n" \
-                          f"매수가: {current_price:,.0f}원\n" \
+                          f"분석 기준가: {current_price:,.0f}원 (체결 원가는 다음 배치에서 확인)\n" \
                           f"목표가: {scenario.get('target_price', 0):,.0f}원\n" \
                           f"손절가: {scenario.get('stop_loss', 0):,.0f}원\n" \
                           f"투자기간: {scenario.get('investment_period', '단기')}\n" \
@@ -3047,6 +3050,12 @@ class StockTrackingAgent:
                 return False
             # ─────────────────────────────────────────────────────────────────
 
+            # Batch reconciliation may have corrected the cost since this caller
+            # loaded its snapshot. History and journal use the locked live row.
+            from prism_core.entry_costs import refresh_sale_cost
+            buy_price = refresh_sale_cost(self.conn, "KR", account_key,
+                                          legacy_holding_ids, stock_data)
+
             # Calculate profit rate
             profit_rate = ((current_price - buy_price) / buy_price) * 100
 
@@ -3522,6 +3531,7 @@ class StockTrackingAgent:
         """
         try:
             logger.info("Starting holdings info update")
+            await reconcile_agent_entry_costs(self, "KR")
 
             # 매도 판단에 쓸 '현재' 시장 레짐을 사이클당 1회 계산(OpenAI 무관).
             # _analyze_sell_decision 이 self._live_regime_cache 로 참조한다.
@@ -3531,9 +3541,7 @@ class StockTrackingAgent:
             # id included for pyramiding (#288): enables per-row delete and
             # fractional-sell quantity computation for multi-row tickers.
             self.cursor.execute(
-                """SELECT id, ticker, company_name, buy_price, buy_date, current_price,
-                   scenario, target_price, stop_loss, last_updated,
-                   trigger_type, trigger_mode, account_key, account_name, sector
+                """SELECT *
                    FROM stock_holdings
                    WHERE account_key = ?""",
                 (self._account_scope()[0],)
@@ -3573,6 +3581,10 @@ class StockTrackingAgent:
             pending_kr_enabled = self._position_pending_kr_enabled()
 
             for stock in holdings:
+                if (not confirmed_cost(stock) or stock.get('ticker') in
+                        getattr(self, '_entry_cost_unresolved', set())):
+                    logger.warning('[ENTRY_COST] decision deferred for %s: fill cost unconfirmed', stock.get('ticker'))
+                    continue
                 ticker = stock.get('ticker')
                 company_name = stock.get('company_name')
                 if pending_kr_enabled and ticker in blocked_tickers:
@@ -3823,7 +3835,7 @@ class StockTrackingAgent:
         try:
             # Query holdings
             self.cursor.execute(
-                "SELECT ticker, company_name, buy_price, current_price, buy_date, scenario, target_price, stop_loss FROM stock_holdings WHERE account_key = ?",
+                "SELECT * FROM stock_holdings WHERE account_key = ?",
                 (self._account_scope()[0],)
             )
             holdings = [dict(row) for row in self.cursor.fetchall()]
@@ -3852,7 +3864,7 @@ class StockTrackingAgent:
                 for h in holdings:
                     buy_price = h.get('buy_price', 0)
                     current_price = h.get('current_price', 0)
-                    if buy_price > 0:
+                    if buy_price > 0 and confirmed_cost(h):
                         profit_rate = ((current_price - buy_price) / buy_price) * 100
                         profit_rates.append((h.get('ticker'), h.get('company_name'), profit_rate))
 
@@ -3871,6 +3883,9 @@ class StockTrackingAgent:
             if holdings and len(holdings) > 0:
                 message += "🔸 보유 종목:\n"
                 for stock in holdings:
+                    if not confirmed_cost(stock):
+                        message += f"- {stock.get('company_name')}({stock.get('ticker')}): 체결 원가 확인 대기 — 수익률 미산출\n"
+                        continue
                     ticker = stock.get('ticker', '')
                     company_name = stock.get('company_name', '')
                     buy_price = stock.get('buy_price', 0)
