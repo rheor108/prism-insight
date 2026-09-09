@@ -15,6 +15,8 @@ import tempfile
 BASE_SHA256 = '88488ec3165a3d23decdc1fad860e6fd9e0d5f37b623e04c52dbdb1e8f23e513'
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = '# PRISM KRX authentication diagnostics v1'
+# First deployed diagnostic patch, supported for the redaction upgrade below.
+PREVIOUS_PATCH_SHA256 = '6b1b99098a0d31c9c8c17cd2a9d54b1064f6bd3a672ba190df36fdc0e6b4a6aa'
 
 
 def replace_once(source, old, new):
@@ -27,7 +29,7 @@ def patched_source(source):
     if hashlib.sha256(source.encode()).hexdigest() != BASE_SHA256:
         raise ValueError('Unsupported KRX dependency hash; no files changed')
     source = replace_once(source, 'import requests\n',
-        f'{MARKER}\nfrom prism_krx_auth_diagnostics import AuthDiagnostics, validation_response\n\nimport requests\n')
+        f'{MARKER}\nfrom prism_krx_auth_diagnostics import AuthDiagnostics, validation_response, redact\n\nimport requests\n')
     source = replace_once(source, '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n',
         '            if "text/html" in resp.headers.get("Content-Type", "") or resp.status_code >= 400:\n'
         '                validation_response(logger, resp)\n\n'
@@ -66,9 +68,12 @@ def patched_source(source):
                             '인증 실패 원인 미확정 (중복 로그인 여부는 확인되지 않음).')
     method = replace_once(method, '        except (KRXBlockedError, KRX2FARequiredError):\n',
         '        except (KRXBlockedError, KRX2FARequiredError) as e:\n'
-        '            await diag.failure("login_exception", e)\n')
+        '            await diag.failure("login_exception", e)\n'
+        '            e.args = tuple(redact(arg, diag.secrets) for arg in e.args)\n')
     method = replace_once(method, '        except Exception as e:\n            logger.error(',
         '        except Exception as e:\n            await diag.failure("login_exception", e)\n            logger.error(')
+    method = replace_once(method, '            raise KRXAuthError(f"KRX 직접 로그인 실패: {e}")',
+        '            raise KRXAuthError(f"KRX 직접 로그인 실패: {redact(e, diag.secrets)}") from None')
     method = replace_once(method, '        finally:\n            await self._cleanup_browser()\n',
         '        finally:\n            await diag.close()\n            await self._cleanup_browser()\n')
     source = source[:start] + method + source[end:]
@@ -104,7 +109,7 @@ def main():
     current = target.read_bytes()
     original = backup.read_bytes() if MARKER.encode() in current else current
     expected = patched_source(original.decode()).encode()
-    if current not in (original, expected):
+    if current not in (original, expected) and hashlib.sha256(current).hexdigest() != PREVIOUS_PATCH_SHA256:
         raise SystemExit('Existing patch differs; no files changed')
     helper = target.with_name('prism_krx_auth_diagnostics.py')
     helper_data = (ROOT / 'patches/krx/auth_diagnostics.py').read_bytes()

@@ -99,7 +99,8 @@ def test_unknown_dependency_refused():
 
 
 @pytest.mark.asyncio
-async def test_patched_real_login_captures_before_browser_cleanup(monkeypatch, caplog):
+@pytest.mark.parametrize('failure', ['data_redirect', 'credential_exception'])
+async def test_patched_real_login_captures_before_browser_cleanup(monkeypatch, caplog, failure):
     """Run the installed dependency's patched method with a fake browser, no network."""
     spec = importlib.util.find_spec('krx_data_client')
     if spec is None:
@@ -117,6 +118,8 @@ async def test_patched_real_login_captures_before_browser_cleanup(monkeypatch, c
     page.closed = False
 
     async def goto(url, **kwargs):
+        if failure == 'credential_exception' and 'MAIN/main' in url:
+            raise RuntimeError('login failed tester p"w\\secret! https://data.krx.co.kr/auth?token=hidden')
         page.url = ('https://data.krx.co.kr/MDCCOMS001.cmd?session=hidden'
                     if 'menuId=' in url else url)
         page.frames[0].url = page.url
@@ -138,10 +141,11 @@ async def test_patched_real_login_captures_before_browser_cleanup(monkeypatch, c
     manager._require_login_iframe = AsyncMock(return_value=iframe)
     manager._cleanup_browser = AsyncMock()
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(module.KRXAuthError, match='원인 미확정'):
+        with pytest.raises(module.KRXAuthError) as raised:
             await manager._login_async_krx()
     assert manager._cleanup_browser.await_count >= 1
-    assert 'data_redirect' in caplog.text
+    assert ('data_redirect' if failure == 'data_redirect' else 'login_exception') in caplog.text
     assert '로그인 오류' in caplog.text
     assert '다른 프로세스의 로그인으로' not in caplog.text
     assert 'tester' not in caplog.text and 'cookievalue' not in caplog.text
+    assert all(secret not in str(raised.value) for secret in ['tester', 'secret!', 'hidden'])
