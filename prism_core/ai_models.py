@@ -39,7 +39,7 @@ def settings(key: str, *, variant: str | None = None, path=None) -> Stage:
             raise ValueError(f'Unsupported max effort for {raw["model"]}')
     if key == 'embedding' and raw['enabled']:
         raise ValueError('Codex text models cannot replace an embedding endpoint')
-    for field, minimum, maximum in [('timeout_seconds',10,1800),('max_tool_rounds',1,40)]:
+    for field, minimum, maximum in [('timeout_seconds',10,2400),('max_tool_rounds',1,40)]:
         if type(raw[field]) is not int or not minimum <= raw[field] <= maximum:
             raise ValueError(f'Invalid {field} for {key}')
     return Stage(key=key, **{f:raw[f] for f in Stage.__dataclass_fields__ if f != 'key'})

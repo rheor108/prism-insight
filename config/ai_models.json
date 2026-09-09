@@ -7,7 +7,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "price_volume": {
@@ -16,7 +16,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "holdings_flow": {
@@ -25,7 +25,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "financials": {
@@ -34,7 +34,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "company": {
@@ -43,7 +43,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "news": {
@@ -52,7 +52,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "market": {
@@ -61,7 +61,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "strategy": {
@@ -70,7 +70,7 @@
       "enabled": true,
       "model": "gpt-6-astra",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "report_summary": {
@@ -88,7 +88,7 @@
       "enabled": true,
       "model": "gpt-6-astra",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "us_buy": {
@@ -97,7 +97,7 @@
       "enabled": true,
       "model": "gpt-6-astra",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "kr_sell": {
@@ -106,7 +106,7 @@
       "enabled": true,
       "model": "gpt-6-astra",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "us_sell": {
@@ -115,7 +115,7 @@
       "enabled": true,
       "model": "gpt-6-astra",
       "effort": "xhigh",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "telegram_summary": {
@@ -133,7 +133,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "medium",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "journal": {
@@ -142,7 +142,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "memory_summary": {
@@ -160,7 +160,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "intuition_refresh": {
@@ -169,7 +169,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "translation": {
@@ -196,7 +196,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "followup": {
@@ -214,7 +214,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "search_analysis": {
@@ -223,7 +223,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "moderation": {
@@ -241,7 +241,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "archive_insight": {
@@ -250,7 +250,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "vision": {
@@ -259,7 +259,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "render_qa": {
@@ -286,7 +286,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
     "video": {
@@ -295,7 +295,7 @@
       "enabled": true,
       "model": "gpt-5.6-sol",
       "effort": "high",
-      "timeout_seconds": 600,
+      "timeout_seconds": 2400,
       "max_tool_rounds": 20,
       "filter": {
         "model": "gpt-5.6-terra",
