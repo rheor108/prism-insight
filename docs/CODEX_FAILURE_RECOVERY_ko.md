@@ -22,3 +22,25 @@ MCP 권한 및 API fallback 금지 정책은 유지합니다.
 - 이미 실행 중인 Python 배치는 기존 모듈을 사용합니다. 다음 새 배치부터 적용됩니다.
 
 검증: `pytest -q tests/test_codex_failure_recovery.py tests/test_subscription_models.py`
+
+## 호출 시간 및 사용량 기록
+
+`logs/codex_calls.jsonl`과 배치 로그의 `[CODEX_METRICS]`에 기록합니다.
+JSONL은 신규 생성 시 권한 0600이며 Git 추적에서 제외됩니다.
+
+- `kind=attempt`: 실제 CLI 시도별 실행 초, 종료 코드, 입력/캐시 입력/출력 토큰.
+- `kind=call`: 호출 ID, 단계, 모델, effort, 성공/실패/시간초과/취소,
+  시도 수, 재시도 대기를 포함한 실행 초, 호출 전후 계정 한도 조회와 변화량.
+- 실행 시간은 계정 사용량 조회 시간을 제외합니다. MCP 도구 조회를 사이에 둔
+  여러 추론 호출은 서로 다른 호출 ID를 가지며 단계 이름으로 묶어 조회할 수 있습니다.
+- 공식 `account/rateLimits/read`를 CLI app-server stdio로 조회하며 조회당 최대
+  5초를 기다립니다. 계정 인증 원문, 응답 내용, 프롬프트는 기록하지 않습니다.
+  조회 실패는 unavailable이며 추론 실패로 처리하지 않습니다. 취소 시 사후 조회는 생략합니다.
+- `account_delta_percentage_points`는 계정 전체 사용률 차이(%p)이며
+  해당 AI 호출만의 정확한 소모율이 아닙니다. 다른 배치와 Codex 앱 사용이 섞일 수 있습니다.
+  서버 집계 지연/반올림으로 0이 나와도 토큰 소모가 없었다는 뜻은 아닙니다.
+- 리셋 시각/윈도 길이가 바뀌거나 사용률이 감소하면 변화량은 null입니다.
+  토큰 정보가 없는 실패 역시 0으로 추정하지 않고 null로 남깁니다.
+- 재시도마다 토큰을 별도 기록하므로 실패한 시도를 포함해 호출 ID로 집계할 수 있습니다.
+
+공식 스키마: https://developers.openai.com/codex/app-server (Rate limits / ChatGPT)

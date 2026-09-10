@@ -128,3 +128,9 @@ async def test_invalid_response_not_retried_or_logged_raw(monkeypatch, caplog):
     assert len(calls) == 1
     assert 'code=invalid_response' in caplog.text
     assert 'private response' not in caplog.text
+
+
+@pytest.fixture(autouse=True)
+def isolate_metrics(monkeypatch, tmp_path):
+    monkeypatch.setattr(sub.metrics, 'quota_snapshot', AsyncMock(return_value={'status': 'unavailable', 'windows': []}))
+    monkeypatch.setattr(sub.metrics, 'METRICS_PATH', tmp_path / 'metrics.jsonl')

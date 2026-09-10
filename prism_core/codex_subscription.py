@@ -18,6 +18,9 @@ import sys
 from dataclasses import replace
 import tempfile
 import uuid
+import time
+
+from prism_core import codex_metrics as metrics
 from types import SimpleNamespace
 
 from prism_core.ai_models import settings
@@ -134,6 +137,9 @@ def _diagnostic_tail(stream):
 async def _invoke(choice, prompt, *, images=(), web_search=False):
     call_id = uuid.uuid4().hex[:12]
     attempt = 0
+    before = await metrics.quota_snapshot(_binary(), _environment())
+    started = time.monotonic()
+    outcome = 'failed'
     try:
         # All retries share the original deadline; run_stage also enforces its
         # existing total deadline across tools and nested research calls.
@@ -156,6 +162,7 @@ async def _invoke(choice, prompt, *, images=(), web_search=False):
                             *command, stdin=asyncio.subprocess.PIPE, stdout=stdout,
                             stderr=stderr, cwd=directory, env=_environment(),
                             start_new_session=True)
+                        attempt_started = time.monotonic()
                         try:
                             await process.communicate(prompt.encode())
                             if process.returncode == 0 and output.exists():
@@ -170,6 +177,7 @@ async def _invoke(choice, prompt, *, images=(), web_search=False):
                                 if attempt > 1:
                                     log.info('[CODEX_RECOVERED] stage=%s model=%s call=%s attempt=%d',
                                              choice.key, choice.model, call_id, attempt)
+                                outcome = 'success'
                                 return result
                             code, retryable, message = _classify_failure(
                                 _diagnostic_tail(stdout), _diagnostic_tail(stderr))
@@ -182,11 +190,28 @@ async def _invoke(choice, prompt, *, images=(), web_search=False):
                                     f'exit={process.returncode}, call={call_id}); no API fallback')
                         finally:
                             await _terminate(process)
+                            metrics.emit({'kind': 'attempt', 'call_id': call_id, 'stage': choice.key,
+                                          'model': choice.model, 'attempt': attempt,
+                                          'duration_seconds': round(time.monotonic()-attempt_started, 3),
+                                          'exit_code': process.returncode, 'tokens': metrics.token_usage(stdout)})
                 await asyncio.sleep(_RETRY_DELAYS[attempt - 1])
+    except asyncio.CancelledError:
+        outcome = 'cancelled'
+        raise
     except TimeoutError:
+        outcome = 'timeout'
         log.warning('[CODEX_FAILURE] stage=%s model=%s call=%s attempt=%d code=timeout retry=False',
                     choice.key, choice.model, call_id, attempt)
         raise
+    finally:
+        elapsed = time.monotonic() - started
+        after = ({'status': 'skipped_cancelled', 'windows': []} if outcome == 'cancelled'
+                 else await metrics.quota_snapshot(_binary(), _environment()))
+        metrics.emit({'kind': 'call', 'call_id': call_id, 'stage': choice.key, 'model': choice.model,
+                      'effort': choice.effort, 'outcome': outcome, 'attempts': attempt,
+                      'duration_seconds': round(elapsed, 3), 'quota_before': before, 'quota_after': after,
+                      'quota_changes': metrics.quota_delta(before, after),
+                      'quota_scope': 'account_shared_not_per_call'})
 
 
 def _allowed(name):

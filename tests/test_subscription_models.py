@@ -329,3 +329,9 @@ async def test_timeout_terminates_codex_child(monkeypatch):
         await sub._invoke(replace(settings('journal'), timeout_seconds=0.01), 'prompt')
     assert killed == [(987654, sub.signal.SIGTERM)]
     process.wait.assert_awaited_once()
+
+
+@pytest.fixture(autouse=True)
+def isolate_metrics(monkeypatch, tmp_path):
+    monkeypatch.setattr(sub.metrics, 'quota_snapshot', AsyncMock(return_value={'status': 'unavailable', 'windows': []}))
+    monkeypatch.setattr(sub.metrics, 'METRICS_PATH', tmp_path / 'metrics.jsonl')
