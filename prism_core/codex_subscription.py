@@ -10,12 +10,14 @@ from contextlib import AsyncExitStack
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
 import sys
 from dataclasses import replace
 import tempfile
+import uuid
 from types import SimpleNamespace
 
 from prism_core.ai_models import settings
@@ -86,35 +88,105 @@ async def _terminate(process):
             await process.wait()
 
 
-async def _invoke(choice, prompt, *, images=(), web_search=False):
-    with tempfile.TemporaryDirectory(prefix='prism-subscription-') as directory:
-        folder = Path(directory)
-        schema = folder/'schema.json'
-        output = folder/'answer.json'
-        envelope = ENVELOPE
-        if web_search:
-            # Native web tools execute inside Codex, never via the parent MCP loop.
-            envelope = {**ENVELOPE, 'properties': {**ENVELOPE['properties'],
-                        'calls': {**ENVELOPE['properties']['calls'], 'maxItems': 0}}}
-        schema.write_text(json.dumps(envelope))
-        command = _command(_binary(), choice, output, schema,
-                           images=images, web_search=web_search)
-        process = await asyncio.create_subprocess_exec(
-            *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE, cwd=directory, env=_environment(),
-            start_new_session=True)
+# Only canonical descriptions are logged: CLI messages may contain credentials,
+# prompts, account identifiers or tool results. Unknown errors stay unknown.
+_ERROR_RULES = (
+    ('authentication', False, r'\b(?:401|403)\b|unauthorized|authentication|invalid_api_key|token.*expired|refresh_token', 'Authentication or access rejected'),
+    ('quota', False, r'\b429\b|quota|usage.limit|rate.limit|too many requests', 'Usage or rate limit reached'),
+    ('invalid_request', False, r'\b400\b|invalid.request|invalid.*schema|context_length|context window|not supported|unsupported|model_not_found', 'Request, model or context rejected'),
+    ('server_error', True, r'\b(?:500|502|503|504)\b|internal.server.error|server_error|service.unavailable|server.overloaded', 'Temporary server failure'),
+    ('connection', True, r'stream disconnected|connection (?:reset|closed)|connectionreset|connectionclosed|broken pipe|network error|error sending request|failed to send websocket request', 'Connection interrupted'),
+)
+_RETRY_DELAYS = (2, 5)
+
+
+def _classify_failure(stdout, stderr):
+    # Look only at failure events, never generated answers or tool output.
+    messages = []
+    for line in stdout.decode(errors='replace').splitlines():
         try:
-            _, stderr = await asyncio.wait_for(
-                process.communicate(prompt.encode()), choice.timeout_seconds)
-            if process.returncode != 0 or not output.exists():
-                # Never put CLI stderr (possibly account metadata) into user logs.
-                raise RuntimeError(f'Codex subscription call failed (exit={process.returncode}); no API fallback')
-            result = json.loads(output.read_text())
-            if not isinstance(result.get('answer'),str) or not isinstance(result.get('calls'),list):
-                raise ValueError('Invalid Codex response envelope')
-            return result
-        finally:
-            await _terminate(process)
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get('type') == 'turn.failed':
+            messages = [json.dumps(event.get('error', {}))]
+        elif event.get('type') == 'error':
+            messages.append(json.dumps({k: event[k] for k in ('message', 'code') if k in event}))
+    if not messages:
+        # Plugin refresh warnings must not cause retries for an unrelated failure.
+        messages = [line for line in stderr.decode(errors='replace').splitlines()
+                    if re.search(r'\bERROR\b|^error:', line)]
+    text = '\n'.join(messages).lower()
+    for code, retryable, pattern, message in _ERROR_RULES:
+        if re.search(pattern, text):
+            return code, retryable, message
+    return 'unknown', False, 'Unclassified CLI failure; raw details suppressed'
+
+
+def _diagnostic_tail(stream):
+    stream.seek(0, os.SEEK_END)
+    stream.seek(max(0, stream.tell() - 262144))
+    return stream.read()
+
+
+async def _invoke(choice, prompt, *, images=(), web_search=False):
+    call_id = uuid.uuid4().hex[:12]
+    attempt = 0
+    try:
+        # All retries share the original deadline; run_stage also enforces its
+        # existing total deadline across tools and nested research calls.
+        async with asyncio.timeout(choice.timeout_seconds):
+            for attempt in range(1, len(_RETRY_DELAYS) + 2):
+                with tempfile.TemporaryDirectory(prefix='prism-subscription-') as directory:
+                    folder = Path(directory)
+                    schema, output = folder/'schema.json', folder/'answer.json'
+                    envelope = ENVELOPE
+                    if web_search:
+                        envelope = {**ENVELOPE, 'properties': {**ENVELOPE['properties'],
+                                    'calls': {**ENVELOPE['properties']['calls'], 'maxItems': 0}}}
+                    schema.write_text(json.dumps(envelope))
+                    command = _command(_binary(), choice, output, schema,
+                                       images=images, web_search=web_search)
+                    # Anonymous, mode-0600 files avoid keeping full model output
+                    # in RAM or persisting raw diagnostic data in application logs.
+                    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                        process = await asyncio.create_subprocess_exec(
+                            *command, stdin=asyncio.subprocess.PIPE, stdout=stdout,
+                            stderr=stderr, cwd=directory, env=_environment(),
+                            start_new_session=True)
+                        try:
+                            await process.communicate(prompt.encode())
+                            if process.returncode == 0 and output.exists():
+                                try:
+                                    result = json.loads(output.read_text())
+                                    if not isinstance(result, dict) or not isinstance(result.get('answer'), str) or not isinstance(result.get('calls'), list):
+                                        raise ValueError('Invalid Codex response envelope')
+                                except (ValueError, UnicodeError):
+                                    log.warning('[CODEX_FAILURE] stage=%s model=%s call=%s attempt=%d code=invalid_response retry=False',
+                                                choice.key, choice.model, call_id, attempt)
+                                    raise ValueError('Invalid Codex response envelope') from None
+                                if attempt > 1:
+                                    log.info('[CODEX_RECOVERED] stage=%s model=%s call=%s attempt=%d',
+                                             choice.key, choice.model, call_id, attempt)
+                                return result
+                            code, retryable, message = _classify_failure(
+                                _diagnostic_tail(stdout), _diagnostic_tail(stderr))
+                            retry = retryable and attempt <= len(_RETRY_DELAYS)
+                            log.warning('[CODEX_FAILURE] stage=%s model=%s call=%s attempt=%d exit=%s code=%s retry=%s message=%s',
+                                        choice.key, choice.model, call_id, attempt, process.returncode, code, retry, message)
+                            if not retry:
+                                raise RuntimeError(
+                                    f'Codex subscription call failed (stage={choice.key}, code={code}, '
+                                    f'exit={process.returncode}, call={call_id}); no API fallback')
+                        finally:
+                            await _terminate(process)
+                await asyncio.sleep(_RETRY_DELAYS[attempt - 1])
+    except TimeoutError:
+        log.warning('[CODEX_FAILURE] stage=%s model=%s call=%s attempt=%d code=timeout retry=False',
+                    choice.key, choice.model, call_id, attempt)
+        raise
 
 
 def _allowed(name):
