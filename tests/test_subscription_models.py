@@ -139,6 +139,68 @@ async def test_external_research_does_not_call_paid_mcp(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_macro_recovers_misrouted_native_search_without_executing_it(monkeypatch):
+    tools=Tools()
+    tools.list_tools=AsyncMock(return_value=[SimpleNamespace(
+        name='perplexity-ask',description='search',inputSchema={'type':'object'})])
+    seen=[]
+    async def invoke(choice,prompt,**kwargs):
+        seen.append((choice.key,prompt,kwargs))
+        if len(seen)==1:
+            return {'answer':'','calls':[{'name':'perplexity-ask','arguments':'{"query":"KR macro"}'}]}
+        if len(seen)==2:
+            return {'answer':'unfinished','calls':[{'name':'web__run','arguments':'{"query":"news"}'}]}
+        if len(seen)==3:
+            assert 'were not executed' in prompt
+            assert 'other native CLI tools' not in prompt
+            assert kwargs['web_search'] is True
+            return {'answer':'Verified news: https://example.org/news','calls':[]}
+        assert 'Verified news' in prompt
+        return {'answer':'Macro report','calls':[]}
+    monkeypatch.setattr(sub,'_invoke',invoke)
+    assert await sub.run_stage('macro','Analyze macro','KR',provider=tools)=='Macro report'
+    assert [stage for stage,_,_ in seen]==['macro','research','research','macro']
+    assert not tools.calls
+
+
+@pytest.mark.asyncio
+async def test_native_search_correction_is_bounded(monkeypatch):
+    fake=AsyncMock(return_value={'answer':'unfinished','calls':[{'name':'web__run','arguments':'{}'}]})
+    monkeypatch.setattr(sub,'_invoke',fake)
+    with pytest.raises(RuntimeError,match='after corrections'):
+        await sub.run_stage('research','Search','Query',web_search=True)
+    assert fake.await_count==3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('calls,web_search',[
+    ([{'name':'web__run','arguments':'{}'}],False),
+    ([{'name':'orders-place_order','arguments':'{}'}],True),
+    ([{'name':'web__run','arguments':'{}'},{'name':'shell','arguments':'{}'}],True),
+])
+async def test_native_search_recovery_does_not_expand_tool_permissions(monkeypatch,calls,web_search):
+    fake=AsyncMock(return_value={'answer':'','calls':calls})
+    monkeypatch.setattr(sub,'_invoke',fake)
+    with pytest.raises(ValueError,match='Unknown or prohibited'):
+        await sub.run_stage('research','Search','Query',web_search=web_search)
+    assert fake.await_count==1
+
+
+@pytest.mark.asyncio
+async def test_native_search_schema_requires_empty_calls(monkeypatch):
+    async def start(*command,**kwargs):
+        schema=json.loads(Path(command[command.index('--output-schema')+1]).read_text())
+        assert schema['properties']['calls']['maxItems']==0
+        assert 'web_search="live"' in command
+        Path(command[command.index('--output-last-message')+1]).write_text(
+            '{"answer":"Sourced answer","calls":[]}')
+        return SimpleNamespace(returncode=0,communicate=AsyncMock(return_value=(None,b'')))
+    monkeypatch.setattr(sub,'_binary',lambda:'codex')
+    monkeypatch.setattr(asyncio,'create_subprocess_exec',start)
+    assert (await sub._invoke(settings('research'),'Search',web_search=True))['answer']=='Sourced answer'
+
+
+@pytest.mark.asyncio
 async def test_report_routing_all_sections_and_strategy(monkeypatch):
     import cores.report_generation as reports
     import prism_core.codex_subscription as transport
