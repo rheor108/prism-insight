@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = '# PRISM KRX authentication diagnostics v1'
 # First deployed diagnostic patch, supported for the redaction upgrade below.
 PREVIOUS_PATCH_SHA256 = '6b1b99098a0d31c9c8c17cd2a9d54b1064f6bd3a672ba190df36fdc0e6b4a6aa'
+PREVIOUS_REDACTION_SHA256 = '90585e28092577e992a1591c7ea64db5a43cfd56c5909b041170a6b650ea0269'
 
 
 def replace_once(source, old, new):
@@ -29,11 +30,46 @@ def patched_source(source):
     if hashlib.sha256(source.encode()).hexdigest() != BASE_SHA256:
         raise ValueError('Unsupported KRX dependency hash; no files changed')
     source = replace_once(source, 'import requests\n',
-        f'{MARKER}\nfrom prism_krx_auth_diagnostics import AuthDiagnostics, validation_response, redact\n\nimport requests\n')
+        f'{MARKER}\nfrom prism_krx_auth_diagnostics import (AuthDiagnostics, validation_response, redact,\n'
+        '    auth_retry_remaining, mark_auth_failure, clear_auth_failure)\n\nimport requests\n')
     source = replace_once(source, '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n',
         '            if "text/html" in resp.headers.get("Content-Type", "") or resp.status_code >= 400:\n'
         '                validation_response(logger, resp)\n\n'
+        '            if resp.status_code >= 400:\n'
+        '                mark_auth_failure(self)\n'
+        '                raise KRXAuthError(f"[KRX_VALIDATION_HTTP] status={resp.status_code}; authentication unknown; session retained")\n\n'
         '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n')
+    source = replace_once(source, '        except Exception as e:\n            logger.warning(f"세션 검증 실패: {e}")',
+        '        except KRXAuthError:\n            raise\n'
+        '        except Exception as e:\n            logger.warning(f"세션 검증 실패: {e}")')
+    source = replace_once(source, '        # 기존 세션 체크 (락 없이)\n',
+        '        remaining = auth_retry_remaining(self)\n'
+        '        if remaining:\n'
+        '            raise KRXAuthError(f"[KRX_AUTH_BACKOFF] retry after {remaining:.0f}s; no login attempted")\n'
+        '        # 기존 세션 체크 (락 없이)\n')
+    source = replace_once(source, '                # 세션 파일 정리 후 로그인\n',
+        '                remaining = auth_retry_remaining(self)\n'
+        '                if remaining:\n'
+        '                    raise KRXAuthError(f"[KRX_AUTH_BACKOFF] retry after {remaining:.0f}s; no login attempted")\n'
+        '                # 세션 파일 정리 후 로그인\n')
+    source = replace_once(source, '                                self._clear_blocked()\n',
+        '                                clear_auth_failure(self)\n                                self._clear_blocked()\n')
+    retry_start = source.index('                    except Exception as e:\n                        last_error = e\n')
+    retry_end = source.index('                raise KRXAuthError(f"로그인 실패 (최대 재시도 횟수 초과): {last_error}")', retry_start)
+    source = source[:retry_start] + (
+        '                    except Exception as e:\n'
+        '                        mark_auth_failure(self)\n'
+        '                        raise KRXAuthError(f"[KRX_AUTH_BACKOFF] login failed; retry in 300s: {redact(e)}") from None\n\n'
+    ) + source[retry_end:]
+    # HTTP failures do not prove expiration. Only the explicit JSON LOGOUT path
+    # above this handler should invoke retry_on_session_expired.
+    http_start = source.index('            if e.response is not None and e.response.status_code == 400:')
+    http_end = source.index('            raise KRXDataError(f"API 요청 실패: {e}")', http_start)
+    source = source[:http_start] + (
+        '            if e.response is not None:\n'
+        '                validation_response(logger, e.response)\n'
+        '                raise KRXDataError(f"[KRX_DATA_HTTP] status={e.response.status_code}; not treated as session expiration") from None\n'
+    ) + source[http_end:]
     start = source.index('    async def _login_async_krx(')
     end = source.index('    async def _cleanup_browser(', start)
     method = source[start:end]
@@ -109,7 +145,7 @@ def main():
     current = target.read_bytes()
     original = backup.read_bytes() if MARKER.encode() in current else current
     expected = patched_source(original.decode()).encode()
-    if current not in (original, expected) and hashlib.sha256(current).hexdigest() != PREVIOUS_PATCH_SHA256:
+    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256}:
         raise SystemExit('Existing patch differs; no files changed')
     helper = target.with_name('prism_krx_auth_diagnostics.py')
     helper_data = (ROOT / 'patches/krx/auth_diagnostics.py').read_bytes()

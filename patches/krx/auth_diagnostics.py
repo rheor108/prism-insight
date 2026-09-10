@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import time
+import hashlib
+from pathlib import Path
 from urllib.parse import urlsplit
 
 FIELDS = {'message', 'msg', 'errormessage', 'errormsg', 'error', 'code',
@@ -24,12 +26,18 @@ def redact(value, secrets=()):
     text = str(value)
     for secret in sorted(set(str(s) for s in secrets if s), key=len, reverse=True):
         text = text.replace(secret, '[REDACTED]')
-    text = re.sub(r'https?://[^\s<>"\']+', lambda m: safe_url(m[0]), text)
+    urls = []
+    def keep_url(match):
+        urls.append(safe_url(match[0]))
+        return f'URLPLACEHOLDER{len(urls)-1}X'
+    text = re.sub(r'https?://[^\s<>"\']+', keep_url, text)
     text = re.sub(r'(?i)(bearer\s+)\S+', r'\1[REDACTED]', text)
     text = re.sub(r'(?i)((?:password|passwd|pw|token|cookie|session|authorization|mbrid|userid|account|비밀번호|아이디)\s*[=:]\s*)[^\s,;]+', r'\1[REDACTED]', text)
     text = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[EMAIL]', text)
     text = re.sub(r'(?<!\w)\d[\d -]{6,}\d(?!\w)', '[NUMBER]', text)
-    text = re.sub(r'[A-Za-z0-9_+/=-]{16,}', '[OPAQUE]', text)
+    text = re.sub(r'[A-Za-z0-9_+/=-]{24,}', '[OPAQUE]', text)
+    for index, url in enumerate(urls):
+        text = text.replace(f'URLPLACEHOLDER{index}X', url)
     # Keep logs single-line, including terminal/control characters.
     return re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', text)[:1600]
 
@@ -66,6 +74,7 @@ class AuthDiagnostics:
         self.logger = logger
         self.secrets = list(secrets)
         self.events = deque(maxlen=20)
+        self.login_events = deque(maxlen=20)
         self.tasks = set()
         self.phase = 'setup'
         self.started = time.monotonic()
@@ -82,7 +91,7 @@ class AuthDiagnostics:
         page.on('dialog', self.on_dialog)
 
     def on_dialog(self, dialog):
-        self.events.append({'kind': 'dialog', 'phase': self.phase,
+        self.login_events.append({'kind': 'dialog', 'phase': self.phase,
                             'type': dialog.type, 'message': dialog.message})
 
     def on_response(self, response):
@@ -104,7 +113,7 @@ class AuthDiagnostics:
     async def capture_response(self, response, phase):
         event = {'kind': 'response', 'phase': phase, 'url': safe_url(response.url),
                  'status': response.status, 'method': response.request.method}
-        self.events.append(event)
+        (self.login_events if phase in {'login_submit','after_submit'} else self.events).append(event)
         try:
             # Do not read HTML or unlimited bodies. Navigation evidence comes from
             # visible text at the checkpoint, not scripts, inputs or hidden DOM.
@@ -137,7 +146,7 @@ class AuthDiagnostics:
                     # Prefer error notices over the page's common navigation text.
                     lines = [s.strip() for s in text.splitlines() if re.search(
                         r'실패|오류|차단|제한|인증|중복|잠금|초과|잘못|일치|비정상|error|denied|invalid|captcha', s, re.I)]
-                    self.events.append({'kind': 'page', 'phase': phase,
+                    (self.login_events if phase == 'after_submit' else self.events).append({'kind': 'page', 'phase': phase,
                                         'url': safe_url(frame.url),
                                         'notice': '\n'.join(lines)[:3000] or text[:600]})
         except Exception as exc:
@@ -155,11 +164,11 @@ class AuthDiagnostics:
                   'elapsed_seconds': round(time.monotonic() - self.started, 1),
                   'error_type': type(error).__name__ if error else 'LoginRedirect',
                   'reason': 'unknown; inspect response and visible notice',
-                  'events': list(self.events)}
+                  'events': list(self.login_events) + list(self.events)}
         # Sanitize values before serializing (credentials may contain quotes).
         def clean(value):
             if isinstance(value, dict):
-                return {redact(k, self.secrets): clean(v) for k, v in value.items()}
+                return {redact(k, self.secrets): (v if k == 'attempt' else clean(v)) for k, v in value.items()}
             if isinstance(value, list):
                 return [clean(v) for v in value]
             return redact(value, self.secrets) if isinstance(value, str) else value
@@ -168,14 +177,21 @@ class AuthDiagnostics:
             '[KRX_AUTH_DIAGNOSTIC] %s', json.dumps(clean(record), ensure_ascii=False))
 
     async def close(self):
-        for task in list(self.tasks):
-            task.cancel()
-        if self.tasks:
-            await asyncio.gather(*list(self.tasks), return_exceptions=True)
-        if self.page is not None:
-            self.page.remove_listener('response', self.on_response)
-            self.page.remove_listener('dialog', self.on_dialog)
-        self.logger.removeFilter(self.log_filter)
+        try:
+            for task in list(self.tasks):
+                task.cancel()
+            if self.tasks:
+                await asyncio.gather(*list(self.tasks), return_exceptions=True)
+            if self.page is not None:
+                for event, listener in [('response', self.on_response), ('dialog', self.on_dialog)]:
+                    try:
+                        self.page.remove_listener(event, listener)
+                    except Exception:
+                        # Playwright sends subscription updates even on removal.
+                        # A stopped driver must not replace the original auth error.
+                        pass
+        finally:
+            self.logger.removeFilter(self.log_filter)
 
 
 def validation_response(logger, response):
@@ -183,3 +199,39 @@ def validation_response(logger, response):
     logger.warning('[KRX_SESSION_VALIDATION] status=%s url=%s content_type=%s',
                    response.status_code, safe_url(response.url),
                    response.headers.get('Content-Type', '')[:80])
+
+
+AUTH_RETRY_COOLDOWN_SECONDS = 300
+
+
+def _retry_path(manager):
+    identity = str(getattr(manager, 'krx_id', '') or getattr(manager, 'kakao_id', ''))
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    return Path(manager.LOCK_PATH).with_name(f'.krx_auth_retry_{digest}.json')
+
+
+def auth_retry_remaining(manager):
+    try:
+        stamp = json.loads(_retry_path(manager).read_text())['failed_at']
+        return max(0, min(AUTH_RETRY_COOLDOWN_SECONDS,
+                          AUTH_RETRY_COOLDOWN_SECONDS - (time.time() - float(stamp))))
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def mark_auth_failure(manager):
+    # Caller holds the dependency's cross-process login lock. No credentials stored.
+    try:
+        path = _retry_path(manager)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'failed_at': time.time()}, stream)
+    except OSError:
+        logging.getLogger('prism.krx_auth').warning('[KRX_AUTH_BACKOFF] state write failed')
+
+
+def clear_auth_failure(manager):
+    try:
+        _retry_path(manager).unlink(missing_ok=True)
+    except OSError:
+        pass

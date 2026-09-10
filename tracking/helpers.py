@@ -60,7 +60,7 @@ async def get_current_stock_price(cursor, ticker: str, account_key: str | None =
         float: Current stock price
     """
     import asyncio
-    from krx_data_client import get_nearest_business_day_in_a_week, get_market_ohlcv_by_ticker
+    from krx_data_client import KRXAuthError, get_nearest_business_day_in_a_week, get_market_ohlcv_by_ticker
     import datetime
 
     # KRX API (data.krx.co.kr) can intermittently time out. Retry the transient
@@ -88,6 +88,12 @@ async def get_current_stock_price(cursor, ticker: str, account_key: str | None =
         except Exception as e:
             logger.error(f"Error querying current price for {ticker} "
                          f"(attempt {attempt + 1}/{MAX_RETRIES}): {str(e)}")
+            if isinstance(e, KRXAuthError):
+                # Auth/backoff cannot improve by replaying the same request.
+                kis_price = await _get_price_from_kis(ticker)
+                if kis_price > 0:
+                    return kis_price
+                return _get_last_price_from_db(cursor, ticker, account_key=account_key)
             if attempt < MAX_RETRIES - 1:
                 wait = 2 * (attempt + 1)  # 2s, 4s exponential-ish backoff
                 logger.warning(f"{ticker} price query retry in {wait}s")
@@ -114,7 +120,7 @@ async def _get_price_from_kis(ticker: str) -> float:
     import asyncio
     try:
         from trading.domestic_stock_trading import AsyncTradingContext
-        async with AsyncTradingContext() as trading:
+        async with AsyncTradingContext(auto_trading=False) as trading:
             info = await asyncio.to_thread(trading.get_current_price, ticker)
         price = float((info or {}).get("current_price") or 0)
         if price > 0:
