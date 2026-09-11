@@ -241,7 +241,7 @@ def test_auth_failure_backoff_is_shared_and_expires(patched_module,tmp_path,monk
     assert diag.auth_retry_remaining(second)==0
 
 
-@pytest.mark.parametrize('status',[400,403,500])
+@pytest.mark.parametrize('status',[400,401,403,429,500])
 def test_http_validation_error_does_not_delete_session_or_relogin(patched_module,tmp_path,status):
     from unittest.mock import Mock
     manager = auth_manager(patched_module,tmp_path)
@@ -249,7 +249,7 @@ def test_http_validation_error_does_not_delete_session_or_relogin(patched_module
     manager._last_validated = None
     manager._get_recent_business_day = lambda:'20260910'
     manager._session = SimpleNamespace(post=Mock(return_value=SimpleNamespace(
-        status_code=status,headers={'Content-Type':'text/html'},url='https://data.krx.co.kr/check')))
+        status_code=status,text='<html>Bad Request</html>',headers={'Content-Type':'text/html'},url='https://data.krx.co.kr/check')))
     with pytest.raises(patched_module.KRXAuthError,match='KRX_VALIDATION_HTTP'):
         manager.login()
     manager._cleanup_session_files.assert_not_called()
@@ -283,3 +283,59 @@ def test_data_http_400_is_not_misclassified_as_expiration(patched_module):
     client._auth_manager=SimpleNamespace(session=SimpleNamespace(post=Mock(return_value=response)))
     with pytest.raises(patched_module.KRXDataError,match='KRX_DATA_HTTP'):
         client._request('test',{})
+
+
+def validation_400_manager(module, tmp_path):
+    from unittest.mock import Mock
+    manager = auth_manager(module, tmp_path)
+    manager._load_session.return_value = True
+    manager._last_validated = None
+    manager._get_recent_business_day = lambda: '20260910'
+    manager._session = SimpleNamespace(post=Mock(return_value=SimpleNamespace(
+        status_code=400, text='LOGOUT', headers={'Content-Type': 'text/html'},
+        url='https://data.krx.co.kr/check')))
+    return manager
+
+
+def test_validation_400_reaches_one_login_then_shared_backoff(patched_module, tmp_path):
+    manager = validation_400_manager(patched_module, tmp_path)
+    with pytest.raises(patched_module.KRXAuthError, match='login failed'):
+        manager.login()
+    assert manager._session.post.call_count == 2  # pre-lock and under-lock validation
+    manager._login_async_krx.assert_awaited_once()
+    second = validation_400_manager(patched_module, tmp_path)
+    with pytest.raises(patched_module.KRXAuthError, match='no login attempted'):
+        second.login()
+    second._login_async_krx.assert_not_awaited()
+    second._session.post.assert_not_called()
+
+
+def test_validation_400_can_recover(patched_module, tmp_path):
+    manager = validation_400_manager(patched_module, tmp_path)
+    manager._login_async_krx = AsyncMock(return_value=True)
+    assert manager.login() is True
+    manager._login_async_krx.assert_awaited_once()
+    assert diag.auth_retry_remaining(manager) == 0
+
+
+def test_validation_400_respects_existing_block(patched_module, tmp_path):
+    from datetime import datetime, timedelta
+    manager = validation_400_manager(patched_module, tmp_path)
+    manager._blocked_until.return_value = datetime.now() + timedelta(hours=1)
+    with pytest.raises(patched_module.KRXBlockedError):
+        manager.login()
+    manager._login_async_krx.assert_not_awaited()
+    manager._cleanup_session_files.assert_not_called()
+
+
+def test_validation_400_reuses_other_process_session(patched_module, tmp_path):
+    from datetime import datetime
+    manager = validation_400_manager(patched_module, tmp_path)
+    def load():
+        if manager._session.post.call_count:
+            manager._last_validated = datetime.now()
+        return True
+    manager._load_session.side_effect = load
+    assert manager.login() is True
+    assert manager._session.post.call_count == 1
+    manager._login_async_krx.assert_not_awaited()

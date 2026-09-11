@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = '# PRISM KRX authentication diagnostics v1'
 # First deployed diagnostic patch, supported for the redaction upgrade below.
 PREVIOUS_PATCH_SHA256 = '6b1b99098a0d31c9c8c17cd2a9d54b1064f6bd3a672ba190df36fdc0e6b4a6aa'
+PREVIOUS_RECOVERY_SHA256 = 'c3ef258f0e3c9dbecce739fe2a8c5a7c98d73f9b63537300b3bc2126e18497f9'
 PREVIOUS_REDACTION_SHA256 = '90585e28092577e992a1591c7ea64db5a43cfd56c5909b041170a6b650ea0269'
 
 
@@ -35,6 +36,9 @@ def patched_source(source):
     source = replace_once(source, '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n',
         '            if "text/html" in resp.headers.get("Content-Type", "") or resp.status_code >= 400:\n'
         '                validation_response(logger, resp)\n\n'
+        '            if resp.status_code == 400 and resp.text.strip() == "LOGOUT":\n'
+        '                logger.warning("[KRX_VALIDATION_RECOVERY] HTTP 400 LOGOUT; recheck under login lock before one login attempt")\n'
+        '                return False\n\n'
         '            if resp.status_code >= 400:\n'
         '                mark_auth_failure(self)\n'
         '                raise KRXAuthError(f"[KRX_VALIDATION_HTTP] status={resp.status_code}; authentication unknown; session retained")\n\n'
@@ -145,7 +149,7 @@ def main():
     current = target.read_bytes()
     original = backup.read_bytes() if MARKER.encode() in current else current
     expected = patched_source(original.decode()).encode()
-    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256}:
+    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256, PREVIOUS_RECOVERY_SHA256}:
         raise SystemExit('Existing patch differs; no files changed')
     helper = target.with_name('prism_krx_auth_diagnostics.py')
     helper_data = (ROOT / 'patches/krx/auth_diagnostics.py').read_bytes()
