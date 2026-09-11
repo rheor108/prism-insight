@@ -17,7 +17,7 @@ def test_all_33_choices_and_video_variant():
     for key in data['stages']:
         assert settings(key).key == key
     for key in ('strategy','kr_buy','us_buy','kr_sell','us_sell'):
-        assert (settings(key).model,settings(key).effort)==('gpt-6-astra','xhigh')
+        assert (settings(key).model,settings(key).effort)==('gpt-6-astra','medium')
     assert settings('journal').model=='gpt-5.6-sol'
     assert settings('telegram_summary').model=='gpt-5.6-terra'
     assert settings('telegram_evaluator').model=='gpt-5.6-sol'
@@ -51,7 +51,7 @@ def test_command_preserves_subscription_and_model_choice(monkeypatch):
     assert not any(k.startswith(('OPENAI_','ANTHROPIC_')) for k in env)
     cmd=sub._command('codex',settings('kr_sell'),'out','schema')
     assert cmd[cmd.index('--model')+1]=='gpt-6-astra'
-    assert 'model_reasoning_effort="xhigh"' in cmd
+    assert 'model_reasoning_effort="medium"' in cmd
     assert 'forced_login_method="chatgpt"' in cmd
     assert '--ignore-user-config' in cmd
     assert 'web_search="disabled"' in cmd

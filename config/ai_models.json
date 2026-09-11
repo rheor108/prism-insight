@@ -69,7 +69,7 @@
       "label": "종합 투자 전략",
       "enabled": true,
       "model": "gpt-6-astra",
-      "effort": "xhigh",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -87,7 +87,7 @@
       "label": "국내 매수",
       "enabled": true,
       "model": "gpt-6-astra",
-      "effort": "xhigh",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -96,7 +96,7 @@
       "label": "미국 매수",
       "enabled": true,
       "model": "gpt-6-astra",
-      "effort": "xhigh",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -105,7 +105,7 @@
       "label": "국내 보유·매도",
       "enabled": true,
       "model": "gpt-6-astra",
-      "effort": "xhigh",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -114,7 +114,7 @@
       "label": "미국 보유·매도",
       "enabled": true,
       "model": "gpt-6-astra",
-      "effort": "xhigh",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
