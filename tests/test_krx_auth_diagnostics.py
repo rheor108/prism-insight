@@ -256,7 +256,8 @@ def test_http_validation_error_does_not_delete_session_or_relogin(patched_module
     manager._login_async_krx.assert_not_awaited()
 
 
-def test_valid_session_still_reused(patched_module,tmp_path):
+@pytest.mark.parametrize("content_type", ["application/json", "text/html; charset=utf-8"])
+def test_valid_session_still_reused(patched_module,tmp_path,content_type):
     from unittest.mock import Mock
     manager = auth_manager(patched_module,tmp_path)
     manager._load_session.return_value=True
@@ -264,7 +265,7 @@ def test_valid_session_still_reused(patched_module,tmp_path):
     manager._get_recent_business_day=lambda:'20260910'
     manager._update_last_validated=Mock()
     manager._session=SimpleNamespace(post=Mock(return_value=SimpleNamespace(
-        status_code=200,headers={'Content-Type':'application/json'},text='{"output":[]}',
+        status_code=200,url='https://data.krx.co.kr/check',headers={'Content-Type':content_type},text='{"output":[]}',
         json=lambda:{'output':[]})))
     assert manager.login() is True
     manager._login_async_krx.assert_not_awaited()
@@ -339,3 +340,12 @@ def test_validation_400_reuses_other_process_session(patched_module, tmp_path):
     assert manager.login() is True
     assert manager._session.post.call_count == 1
     manager._login_async_krx.assert_not_awaited()
+
+
+def test_actual_html_is_not_authenticated(patched_module, tmp_path):
+    from unittest.mock import Mock
+    manager = validation_400_manager(patched_module, tmp_path)
+    manager._session.post.return_value = SimpleNamespace(
+        status_code=200, text='<html>login</html>', headers={'Content-Type': 'text/html'},
+        url='https://data.krx.co.kr/check', json=Mock(side_effect=ValueError('not JSON')))
+    assert manager._validate_session() is False

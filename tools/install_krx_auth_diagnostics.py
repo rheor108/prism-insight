@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = '# PRISM KRX authentication diagnostics v1'
 # First deployed diagnostic patch, supported for the redaction upgrade below.
 PREVIOUS_PATCH_SHA256 = '6b1b99098a0d31c9c8c17cd2a9d54b1064f6bd3a672ba190df36fdc0e6b4a6aa'
+PREVIOUS_LOGOUT_SHA256 = '24c2cf6b0111ddfa4182a09c6166dc96531b8913b80556c9fd9b9d1885ced309'
 PREVIOUS_RECOVERY_SHA256 = 'c3ef258f0e3c9dbecce739fe2a8c5a7c98d73f9b63537300b3bc2126e18497f9'
 PREVIOUS_REDACTION_SHA256 = '90585e28092577e992a1591c7ea64db5a43cfd56c5909b041170a6b650ea0269'
 
@@ -43,6 +44,11 @@ def patched_source(source):
         '                mark_auth_failure(self)\n'
         '                raise KRXAuthError(f"[KRX_VALIDATION_HTTP] status={resp.status_code}; authentication unknown; session retained")\n\n'
         '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n')
+    source = replace_once(source,
+        '            if "text/html" in content_type:\n'
+        '                logger.info("HTML 응답 - 로그인 필요")\n'
+        '                return False\n',
+        '            # KRX can return valid JSON with a text/html header. Parse the body below.\n')
     source = replace_once(source, '        except Exception as e:\n            logger.warning(f"세션 검증 실패: {e}")',
         '        except KRXAuthError:\n            raise\n'
         '        except Exception as e:\n            logger.warning(f"세션 검증 실패: {e}")')
@@ -149,7 +155,7 @@ def main():
     current = target.read_bytes()
     original = backup.read_bytes() if MARKER.encode() in current else current
     expected = patched_source(original.decode()).encode()
-    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256, PREVIOUS_RECOVERY_SHA256}:
+    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256, PREVIOUS_RECOVERY_SHA256, PREVIOUS_LOGOUT_SHA256}:
         raise SystemExit('Existing patch differs; no files changed')
     helper = target.with_name('prism_krx_auth_diagnostics.py')
     helper_data = (ROOT / 'patches/krx/auth_diagnostics.py').read_bytes()
