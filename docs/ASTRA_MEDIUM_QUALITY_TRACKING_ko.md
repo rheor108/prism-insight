@@ -25,8 +25,22 @@ Astra effort만 xhigh → medium으로 변경합니다. Sol 재무 분석 xhigh�
   이미 검토한 항목은 중복 집계하지 않습니다. 개인 데이터나 원본 로그를 Git에 올리지 않습니다.
 - 최소 5거래일 및 시장별 최종 판단 10건을 확보한 뒤 중간 평가합니다.
   제약 위반·심각한 모순은 표본 수에 관계없이 즉시 보고합니다. 표본이 부족하면 결론을 유보합니다.
-- 자동 모델 상향, 전략 수정, 주문 재실행, 외부 메시지 전송은 하지 않습니다.
+- 자동 모델 상향, 전략 수정, 주문 재실행은 하지 않습니다. 외부 전송은 아래 승인된 텔레그램 품질 알림으로 한정합니다.
   문제가 확인되면 해당 단계만 high로 올리는 안을 증거와 함께 사용자에게 제안합니다.
 
 이는 운영 관찰이며 같은 입력에 대한 xhigh/medium 대조 실험이나 수익성 검증은 아닙니다.
 추적은 현재 Codex 작업의 heartbeat로 6시간마다 새 결과를 확인하며, 변화가 없으면 알리지 않습니다.
+
+## 텔레그램 알림 (2026-09-11 사용자 승인)
+
+중간 평가 또는 심각한 모순·제약 위반 등 보고할 새 내용이 생기면 기존 .env의
+TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID 수신처로 한국어 요약도 전송합니다.
+새 결과·의미 있는 변화가 없으면 전송하지 않습니다. 원문 계좌정보나 비밀값은 포함하지 않습니다.
+
+검토 결과를 migration/quality_tracking 아래 UTF-8 텍스트 파일로 먼저 저장하고,
+운영 루트에서 `.venv/bin/python tools/send_quality_notification.py --event-id <안정적인 사건ID> --message-file <파일경로>`를 실행합니다.
+같은 사건에는 같은 ID와 같은 본문을 사용합니다. 전송 상태는 logs/quality_notifications.sqlite에
+기록합니다. sent만 성공이며 rejected/uncertain/pending은 자동 재전송하지 말고 Codex 작업에
+보고합니다. duplicate_suppressed의 previous_status도 확인합니다.
+전송 성공 후 실제 message_id와 사건 ID를 검토 기록에 남깁니다. Telegram API가 성공을 반환해도
+사용자의 기기에서 푸시 알림이 표시됐거나 읽었다는 뜻은 아닙니다.
