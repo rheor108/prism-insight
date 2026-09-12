@@ -6,7 +6,8 @@ from pathlib import Path
 
 CONFIG = Path(__file__).resolve().parents[1] / 'config/ai_models.json'
 MODELS = {'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-          'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'}
+          'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark',
+          'claude-sonnet-5', 'claude-opus-5'}
 EFFORTS = {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}
 
 @dataclass(frozen=True)
@@ -20,11 +21,15 @@ class Stage:
     timeout_seconds: int
     max_tool_rounds: int
 
+    @property
+    def provider(self):
+        return "claude_subscription" if (self.model or "").startswith("claude-") else "codex_subscription"
+
 
 def settings(key: str, *, variant: str | None = None, path=None) -> Stage:
     data = json.loads(Path(path or os.getenv('PRISM_AI_CONFIG') or CONFIG).read_text())
     if data.get('provider') != 'codex_subscription':
-        raise ValueError('This fork requires Codex subscription authentication; API fallback is disabled')
+        raise ValueError('This fork requires subscription authentication; API fallback is disabled')
     raw = dict(data['stages'][key])
     if variant:
         raw.update(raw[variant])

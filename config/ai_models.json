@@ -6,7 +6,7 @@
       "label": "거시경제·시장 이슈",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -24,7 +24,7 @@
       "label": "수급·기관 보유",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -33,7 +33,7 @@
       "label": "재무·실적·밸류에이션",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "xhigh",
+      "effort": "high",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -41,8 +41,8 @@
       "number": 5,
       "label": "기업 개요·경쟁력",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -50,8 +50,8 @@
       "number": 6,
       "label": "뉴스·이벤트",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -59,8 +59,8 @@
       "number": 7,
       "label": "시장지수",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -78,7 +78,7 @@
       "label": "보고서 요약",
       "enabled": true,
       "model": "gpt-5.6-terra",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 300,
       "max_tool_rounds": 8
     },
@@ -123,7 +123,7 @@
       "label": "알림 요약",
       "enabled": true,
       "model": "gpt-5.6-terra",
-      "effort": "medium",
+      "effort": "low",
       "timeout_seconds": 300,
       "max_tool_rounds": 8
     },
@@ -131,7 +131,7 @@
       "number": 15,
       "label": "알림 품질 평가",
       "enabled": true,
-      "model": "gpt-5.6-sol",
+      "model": "claude-sonnet-5",
       "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
@@ -140,7 +140,7 @@
       "number": 16,
       "label": "매매 회고",
       "enabled": true,
-      "model": "gpt-5.6-sol",
+      "model": "claude-opus-5",
       "effort": "high",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
@@ -158,7 +158,7 @@
       "number": 18,
       "label": "장기 기억·직관",
       "enabled": true,
-      "model": "gpt-5.6-sol",
+      "model": "claude-opus-5",
       "effort": "high",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
@@ -167,8 +167,8 @@
       "number": 19,
       "label": "직관 갱신",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-opus-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -194,8 +194,8 @@
       "number": 22,
       "label": "보유 진단·상담",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -204,7 +204,7 @@
       "label": "분석 후속 질문",
       "enabled": true,
       "model": "gpt-5.6-terra",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 300,
       "max_tool_rounds": 8
     },
@@ -212,8 +212,8 @@
       "number": 24,
       "label": "회고 대화",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -221,8 +221,8 @@
       "number": 25,
       "label": "검색 결과 분석",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -240,7 +240,7 @@
       "label": "아카이브 질의",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -248,7 +248,7 @@
       "number": 28,
       "label": "아카이브 인사이트",
       "enabled": true,
-      "model": "gpt-5.6-sol",
+      "model": "claude-opus-5",
       "effort": "high",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
@@ -258,7 +258,7 @@
       "label": "차트 이미지 해석",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -267,7 +267,7 @@
       "label": "차트 시각 검사",
       "enabled": true,
       "model": "gpt-5.6-terra",
-      "effort": "medium",
+      "effort": "low",
       "timeout_seconds": 300,
       "max_tool_rounds": 8
     },
@@ -285,7 +285,7 @@
       "label": "외부 자료 조사",
       "enabled": true,
       "model": "gpt-5.6-sol",
-      "effort": "high",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20
     },
@@ -293,13 +293,13 @@
       "number": 33,
       "label": "영상 전사문 분석",
       "enabled": true,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
       "timeout_seconds": 2400,
       "max_tool_rounds": 20,
       "filter": {
-        "model": "gpt-5.6-terra",
-        "effort": "medium"
+        "model": "gpt-5.6-luna",
+        "effort": "low"
       }
     }
   }

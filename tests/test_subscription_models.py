@@ -18,10 +18,10 @@ def test_all_33_choices_and_video_variant():
         assert settings(key).key == key
     for key in ('strategy','kr_buy','us_buy','kr_sell','us_sell'):
         assert (settings(key).model,settings(key).effort)==('gpt-6-astra','medium')
-    assert settings('journal').model=='gpt-5.6-sol'
+    assert settings('journal').model=='claude-opus-5'
     assert settings('telegram_summary').model=='gpt-5.6-terra'
-    assert settings('telegram_evaluator').model=='gpt-5.6-sol'
-    assert settings('video',variant='filter').model=='gpt-5.6-terra'
+    assert settings('telegram_evaluator').model=='claude-sonnet-5'
+    assert settings('video',variant='filter').model=='gpt-5.6-luna'
     assert not settings('embedding').enabled
 
 
@@ -326,7 +326,7 @@ async def test_timeout_terminates_codex_child(monkeypatch):
     killed = []
     monkeypatch.setattr(sub.os, 'killpg', lambda pid, sig: killed.append((pid, sig)))
     with pytest.raises(TimeoutError):
-        await sub._invoke(replace(settings('journal'), timeout_seconds=0.01), 'prompt')
+        await sub._invoke(replace(settings('macro'), timeout_seconds=0.01), 'prompt')
     assert killed == [(987654, sub.signal.SIGTERM)]
     process.wait.assert_awaited_once()
 
