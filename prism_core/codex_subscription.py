@@ -355,7 +355,7 @@ class RegistryTools:
                 if env.get('PYTHONPATH') == '.':
                     env['PYTHONPATH'] = str(ROOT)
                 command = original.command
-                if name in {'time','kospi_kosdaq'} and command in {'python','python3'}:
+                if name in {'time','kospi_kosdaq','firecrawl'} and command in {'python','python3'}:
                     command = sys.executable
                 runtime = replace(original,command=command,env=env,cwd=original.cwd or str(ROOT))
                 registry = McpServerRegistry({name:runtime})

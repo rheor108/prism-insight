@@ -6,13 +6,12 @@ servers:
     - '@mzxrai/mcp-webresearch@latest'
     read_timeout_seconds: 120
   firecrawl:
-    # Keep tool schemas deterministic across hosts and cron runs.
-    command: npx
-    args:
-    - -y
-    - firecrawl-mcp@3.23.6
+    # Compatibility tool name; implementation is local Crawl4AI, with no API key.
+    command: ${PRISM_MCP_PYTHON:-python3}
+    args: [-m, prism_core.scraper_bootstrap]
     env:
-      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+      PYTHONPATH: ${PRISM_REPO_ROOT:-.}
+    read_timeout_seconds: 90
   # 2026-08-05: kospi_kosdaq_stock_server(PyPI) 에서 리포 내 서버로 교체했다.
   #
   # 그 패키지는 KRX Data Marketplace 를 카카오 로그인으로 스크래핑한다. KRX 가
