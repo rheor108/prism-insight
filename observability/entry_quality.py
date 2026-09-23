@@ -1,4 +1,4 @@
-"""US entry-quality capture built only from already available local facts.
+"""KR/US entry-quality capture built only from already available local facts.
 
 This module is deliberately observation-only.  It does not fetch market data,
 call a model, or return an entry decision.  Missing evidence stays ``MISSING``
@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import os
+import re
 import sys
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -88,6 +90,23 @@ def _number(value: Any) -> float | int | None:
         return None
 
 
+def _kr_price_number(value: Any) -> float | int | None:
+    """Accept KR prompt price formats, never infer prices from narrative text."""
+    if isinstance(value, str):
+        text = value.strip()
+        number = r"(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?"
+        match = re.fullmatch(rf"({number})(?:\s*~\s*({number}))?", text)
+        if match is None:
+            return None
+        low = float(match.group(1).replace(",", ""))
+        high = float((match.group(2) or match.group(1)).replace(",", ""))
+        if high < low:
+            return None
+        value = low / 2 + high / 2
+    result = _number(value)
+    return result if result is not None and math.isfinite(result) and result > 0 else None
+
+
 def _distance_pct(level: Any, current_price: Any) -> float | None:
     normalized_level = _number(level)
     normalized_price = _number(current_price)
@@ -143,7 +162,9 @@ def _load_performance_feedback_module() -> Any:
     return module
 
 
-def trigger_prior_snapshot(cursor: Any, trigger_type: str | None) -> dict[str, Any]:
+def trigger_prior_snapshot(
+    cursor: Any, trigger_type: str | None, *, market: str = "US"
+) -> dict[str, Any]:
     """Read the existing local feedback tables; never raise into trading."""
 
     if not trigger_type:
@@ -154,7 +175,7 @@ def trigger_prior_snapshot(cursor: Any, trigger_type: str | None) -> dict[str, A
         }
     try:
         feedback_module = _load_performance_feedback_module()
-        feedback = feedback_module.get_trigger_feedback(cursor, "US", trigger_type)
+        feedback = feedback_module.get_trigger_feedback(cursor, market, trigger_type)
         candidate = _selected_trigger_stats(
             feedback.get("candidate_trigger"), actual=False
         )
@@ -189,12 +210,17 @@ def build_entry_quality_context(
     *,
     scenario: Mapping[str, Any] | None,
     current_price: Any,
+    market: str = "US",
     cursor: Any = None,
     trigger_type: str | None = None,
     as_of: datetime | None = None,
     captured_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build a compact, versioned context from the existing US decision input."""
+    """Build local context for one market; the default preserves the US contract."""
+
+    normalized_market = str(market or "").strip().upper()
+    if normalized_market not in {"KR", "US"}:
+        raise ValueError("unsupported entry-quality market")
 
     captured = _as_utc(captured_at)
     observed = _as_utc(as_of or captured)
@@ -210,8 +236,9 @@ def build_entry_quality_context(
         "primary_resistance",
         "secondary_resistance",
     )
+    price_number = _kr_price_number if normalized_market == "KR" else _number
     normalized_levels = {
-        key: _number(key_levels.get(key)) for key in level_fields
+        key: price_number(key_levels.get(key)) for key in level_fields
     }
     normalized_levels = {
         key: value for key, value in normalized_levels.items() if value is not None
@@ -247,7 +274,7 @@ def build_entry_quality_context(
     if setup_status == "MISSING":
         setup_quality["reason_code"] = "KEY_LEVELS_MISSING"
 
-    trigger_prior = trigger_prior_snapshot(cursor, trigger_type)
+    trigger_prior = trigger_prior_snapshot(cursor, trigger_type, market=normalized_market)
     trigger_prior["as_of"] = _iso(observed)
 
     # The current scenario contains prose about news, not a versioned event
@@ -291,6 +318,9 @@ def build_entry_quality_context(
         "event_risk": event_risk,
         "trigger_prior": trigger_prior,
     }
+    # Preserve existing US hashes while making KR provenance unambiguous.
+    if normalized_market == "KR":
+        hash_input["market"] = normalized_market
     encoded = json.dumps(
         hash_input, ensure_ascii=True, separators=(",", ":"), sort_keys=True
     )
@@ -299,8 +329,11 @@ def build_entry_quality_context(
         "status": validate_completeness_status(overall_status),
         "missing_components": missing_components,
         "as_of": _iso(observed),
-        "source": "existing_us_scenario_and_local_feedback",
-        "extractor_version": ENTRY_QUALITY_EXTRACTOR_VERSION,
+        "source": f"existing_{normalized_market.lower()}_scenario_and_local_feedback",
+        "extractor_version": (
+            "kr-local-facts-v1" if normalized_market == "KR"
+            else ENTRY_QUALITY_EXTRACTOR_VERSION
+        ),
         "input_hash": hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24],
         "setup_quality": setup_quality,
         "event_risk": event_risk,

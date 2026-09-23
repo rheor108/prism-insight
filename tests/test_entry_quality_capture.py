@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 import sys
@@ -231,3 +232,115 @@ def test_candidate_context_is_optional_and_fill_event_is_fail_open(
         result={"success": True},
     ) is None
     assert spool.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("market", ["KR", "US"])
+def test_market_specific_prior_is_read_only_and_never_crosses_markets(market):
+    cursor = _feedback_cursor()
+    cursor.execute("""CREATE TABLE analysis_performance_tracker (
+        trigger_type TEXT, was_traded INTEGER, tracked_7d_return REAL,
+        tracked_14d_return REAL, tracked_30d_return REAL)""")
+    cursor.execute("""CREATE TABLE trading_history (
+        id INTEGER, trigger_type TEXT, profit_rate REAL, sell_date TEXT)""")
+    cursor.execute(
+        "INSERT INTO analysis_performance_tracker VALUES ('Volume Surge', 0, .1, .2, .3)"
+    )
+    cursor.execute(
+        "INSERT INTO trading_history VALUES (1, 'Volume Surge', 15, '2026-08-01')"
+    )
+    cursor.connection.commit()
+    writes_before = cursor.connection.total_changes
+    statements = []
+    cursor.connection.set_trace_callback(statements.append)
+    scenario = {"buy_score": 8, "decision": "Enter", "trading_scenarios": {
+        "key_levels": {"primary_support": 95, "primary_resistance": 110}
+    }}
+    original = copy.deepcopy(scenario)
+    at = datetime(2026, 9, 23, tzinfo=timezone.utc)
+    context = build_entry_quality_context(
+        market=market, scenario=scenario, current_price=100, cursor=cursor,
+        trigger_type="Volume Surge", as_of=at, captured_at=at,
+    )
+    assert context["trigger_prior"]["actual"]["median_return_pct"] == (
+        15.0 if market == "KR" else -2.5
+    )
+    assert context["trigger_prior"]["candidate"]["median_30d_pct"] == (
+        30.0 if market == "KR" else -0.5
+    )
+    assert context["extractor_version"] == f"{market.lower()}-local-facts-v1"
+    assert context["source"] == f"existing_{market.lower()}_scenario_and_local_feedback"
+    assert context["status"] == "MISSING"
+    assert scenario == original
+    assert cursor.connection.total_changes == writes_before
+    assert statements and all(sql.lstrip().upper().startswith("SELECT") for sql in statements)
+    cursor.connection.close()
+
+
+def test_kr_capture_does_not_fall_back_to_us_history():
+    cursor = _feedback_cursor()
+    context = build_entry_quality_context(
+        market="KR", scenario={}, current_price=70000,
+        cursor=cursor, trigger_type="Volume Surge",
+    )
+    assert context["trigger_prior"]["status"] == "MISSING"
+    assert context["trigger_prior"]["reason_code"] == "NO_MATURED_TRIGGER_HISTORY"
+    cursor.connection.close()
+
+
+@pytest.mark.parametrize("price,expected", [
+    (66500, 66500), ("66,500", 66500), ("66,000 ~ 67,000", 66500),
+    ("66000~67000", 66500), ("약 66,500원 지지", None), ("66,50", None),
+    ("67000~66000", None), (0, None), (-1, None), (True, None),
+    (float("nan"), None), (float("inf"), None), (None, None),
+])
+def test_kr_structured_price_formats_and_missing_evidence(price, expected):
+    context = build_entry_quality_context(
+        market="KR", scenario={"trading_scenarios": {
+            "key_levels": {"primary_support": price}
+        }}, current_price=70000,
+    )
+    setup = context["setup_quality"]
+    assert setup["entry_position"]["levels"].get("primary_support") == expected
+    assert setup["status"] == ("OK" if expected else "MISSING")
+    if expected:
+        assert setup["entry_position"]["distances_from_entry_pct"] == {
+            "primary_support_distance_pct": -5.0
+        }
+    assert setup["daily"]["status"] == "MISSING"
+    assert context["event_risk"]["status"] == "MISSING"
+
+
+def test_market_provenance_keeps_us_default_stable_and_separates_kr_hash():
+    at = datetime(2026, 9, 23, tzinfo=timezone.utc)
+    args = dict(scenario={}, current_price=100, as_of=at, captured_at=at)
+    legacy = build_entry_quality_context(**args)
+    explicit_us = build_entry_quality_context(market="US", **args)
+    kr = build_entry_quality_context(market=" kr ", **args)
+    assert legacy == explicit_us
+    assert legacy["input_hash"] == "ca9eff399db9003f16293743"
+    assert kr["input_hash"] != explicit_us["input_hash"]
+    with pytest.raises(ValueError, match="unsupported"):
+        build_entry_quality_context(market="invalid", **args)
+
+
+def test_kr_capture_flows_to_existing_evidence_packet(monkeypatch, tmp_path):
+    from tools.build_entry_quality_evidence_packet import build_evidence_packet
+
+    monkeypatch.setenv("PRISM_OBSERVABILITY_SPOOL", str(tmp_path / "events.jsonl"))
+    context = build_entry_quality_context(
+        market="KR", scenario={"trading_scenarios": {
+            "key_levels": {"primary_support": "66,500", "primary_resistance": "77,000"}
+        }}, current_price=70000,
+    )
+    event = emit_trading_context(
+        "candidate.evaluated", market="KR", ticker="005930",
+        decision_id="kr-capture-test", entry_quality_context=context,
+        decision_context={"decision": "No Entry", "buy_score": 6},
+    )
+    packet = build_evidence_packet([event], market="KR")
+    assert packet["market"] == "KR"
+    assert packet["prospective_cohort"]["candidate_count"] == 1
+    assert packet["coverage"]["captured_count"] == 1
+    assert packet["missingness"]["quality_status_distribution"] == {"MISSING": 1}
+    assert packet["data_quality"]["anti_leakage_exclusion_count"] == 0
+    assert packet["analysis_rows"][0]["outcomes"]["confirmed_actual_return_pct"] is None

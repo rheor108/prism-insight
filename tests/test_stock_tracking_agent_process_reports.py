@@ -1,4 +1,6 @@
 import asyncio
+import copy
+import json
 import logging
 import sqlite3
 import sys
@@ -17,6 +19,12 @@ import trading.domestic_stock_trading as domestic_trading
 from stock_tracking_agent import StockTrackingAgent
 from prism_core.positions import LegacyPositionWriteResult
 from tracking.db_schema import TABLE_STOCK_HOLDINGS, TABLE_TRADING_HISTORY
+
+
+@pytest.fixture(autouse=True)
+def _isolate_capture_and_market_reads(monkeypatch, tmp_path):
+    monkeypatch.setenv("PRISM_OBSERVABILITY_SPOOL", str(tmp_path / "events.jsonl"))
+    monkeypatch.setattr("cores.regime_policy.get_market_pulse_state", lambda _market: None)
 
 
 def _ensure_reentry_schema(path):
@@ -335,8 +343,17 @@ def _install_signal_modules(monkeypatch, redis_calls, gcp_calls):
     monkeypatch.setitem(sys.modules, "messaging.gcp_pubsub_signal_publisher", gcp_module)
 
 
+@pytest.mark.parametrize("capture_mode", ["0", "1", "error"])
 @pytest.mark.asyncio
-async def test_process_reports_analyzes_once_and_dedupes_signals(monkeypatch, caplog, tmp_path):
+async def test_process_reports_analyzes_once_and_dedupes_signals(
+    monkeypatch, caplog, tmp_path, capture_mode
+):
+    monkeypatch.setenv("ENTRY_QUALITY_CAPTURE_ENABLED", "0" if capture_mode == "0" else "1")
+    monkeypatch.setenv("PRISM_OBSERVABILITY_SPOOL", str(tmp_path / "events.jsonl"))
+    if capture_mode == "error":
+        def fail_capture(**_kwargs):
+            raise RuntimeError("secret capture payload must not leak")
+        monkeypatch.setattr("stock_tracking_agent.build_entry_quality_context", fail_capture)
     agent = StockTrackingAgent.__new__(StockTrackingAgent)
     agent.db_path = str(tmp_path / "stock_tracking.sqlite")
     _ensure_reentry_schema(agent.db_path)
@@ -346,6 +363,8 @@ async def test_process_reports_analyzes_once_and_dedupes_signals(monkeypatch, ca
     ]
     agent.active_account = None
     agent.max_slots = 10
+    agent.message_queue = []
+    agent._msg_types = []
 
     core_calls = []
     holdings_checks = []
@@ -432,6 +451,20 @@ async def test_process_reports_analyzes_once_and_dedupes_signals(monkeypatch, ca
     assert len(redis_calls) == 1
     assert len(gcp_calls) == 1
     assert "partial success" in caplog.text.lower()
+    candidates = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()
+                  if json.loads(line)["event_type"] == "candidate.evaluated"]
+    assert len(candidates) == 2
+    for event in candidates:
+        attrs = event["attributes"]
+        assert attrs["decision_context"]["selected_for_entry"] is True
+        assert ("entry_quality_context" in attrs) == (capture_mode == "1")
+        if capture_mode == "1":
+            assert attrs["entry_quality_context"]["extractor_version"] == "kr-local-facts-v1"
+    assert redis_calls[0]["scenario"]["buy_score"] == 8
+    assert "entry_quality_context" not in redis_calls[0]["scenario"]
+    assert "secret capture payload" not in caplog.text
+    if capture_mode == "error":
+        assert "[ENTRY_QUALITY_CAPTURE][KR] context skipped: RuntimeError" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -449,6 +482,8 @@ async def test_sideways_uptrend_score_six_uses_half_size_kr_order(monkeypatch, t
     agent.active_account = None
     agent.max_slots = 10
     agent._position_pending_kr_ready = False
+    agent.message_queue = []
+    agent._msg_types = []
 
     async def fake_core(_report_path):
         return {
@@ -857,3 +892,58 @@ def test_safe_account_log_label_masks_account_key():
     )
 
     assert label == "kr-primary (vps:12****78:01)"
+
+
+@pytest.mark.parametrize("capture_mode", ["0", "1", "error"])
+@pytest.mark.asyncio
+async def test_kr_watchlist_capture_keeps_candidate_and_tracker_on_failure(
+    monkeypatch, tmp_path, caplog, capture_mode
+):
+    from tracking.db_schema import TABLE_WATCHLIST_HISTORY, TABLE_ANALYSIS_PERFORMANCE_TRACKER
+
+    monkeypatch.setenv("ENTRY_QUALITY_CAPTURE_ENABLED", "0" if capture_mode == "0" else "1")
+    spool = tmp_path / "events.jsonl"
+    monkeypatch.setenv("PRISM_OBSERVABILITY_SPOOL", str(spool))
+    if capture_mode == "error":
+        def fail_capture(**_kwargs):
+            raise RuntimeError("secret capture payload must not leak")
+        monkeypatch.setattr("stock_tracking_agent.build_entry_quality_context", fail_capture)
+    agent = StockTrackingAgent.__new__(StockTrackingAgent)
+    agent.conn = sqlite3.connect(":memory:")
+    agent.cursor = agent.conn.cursor()
+    agent.cursor.execute(TABLE_WATCHLIST_HISTORY)
+    agent.cursor.execute(TABLE_ANALYSIS_PERFORMANCE_TRACKER)
+    agent.max_slots = 10
+    agent._get_current_slots_count = AsyncMock(return_value=0)
+    agent.trigger_info_map = {"005930": {"trigger_type": "Volume Surge", "trigger_mode": "morning"}}
+    scenario = {"_decision_id": "kr-rejected-candidate", "buy_score": 6,
+                "decision": "No Entry", "target_price": 77000, "stop_loss": 66500,
+                "trading_scenarios": {"key_levels": {"primary_support": "66,500"}}}
+    original = copy.deepcopy(scenario)
+    try:
+        assert await agent._save_watchlist_item(
+            ticker="005930", company_name="Samsung", current_price=70000,
+            buy_score=6, min_score=8, decision="No Entry", skip_reason="score gate",
+            scenario=scenario, sector="Technology",
+        )
+        assert agent.cursor.execute("SELECT COUNT(*) FROM watchlist_history").fetchone()[0] == 1
+        tracker = agent.cursor.execute(
+            "SELECT decision_id, decision, was_traded, buy_score FROM analysis_performance_tracker"
+        ).fetchone()
+        assert tracker == ("kr-rejected-candidate", "No Entry", 0, 6)
+        event, = [json.loads(line) for line in spool.read_text().splitlines()]
+        assert event["event_type"] == "candidate.evaluated"
+        attrs = event["attributes"]
+        assert attrs["source"] == "kr_batch_watchlist"
+        assert attrs["decision_context"]["skip_reason"] == "score gate"
+        assert ("entry_quality_context" in attrs) == (capture_mode == "1")
+        if capture_mode == "1":
+            context = attrs["entry_quality_context"]
+            assert context["extractor_version"] == "kr-local-facts-v1"
+            assert context["setup_quality"]["entry_position"]["distances_from_entry_pct"] == {
+                "primary_support_distance_pct": -5.0
+            }
+        assert scenario == original
+        assert "secret capture payload" not in caplog.text
+    finally:
+        agent.conn.close()

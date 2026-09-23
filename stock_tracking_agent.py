@@ -71,6 +71,10 @@ from prism_core.positions import (
     legacy_position_id,
     mirror_write_fail_open,
 )
+from observability.entry_quality import (
+    build_entry_quality_context,
+    capture_enabled as entry_quality_capture_enabled,
+)
 from observability.journal_influence import (
     attach_deterministic_score_effect,
     build_journal_influence_context,
@@ -256,6 +260,32 @@ async def _generate_trading_scenario_json(
         bounded_attempts,
     )
     return None
+
+
+def _capture_entry_quality_context(
+    *,
+    cursor: Any,
+    scenario: Dict[str, Any],
+    current_price: float,
+    trigger_type: str | None,
+) -> Dict[str, Any] | None:
+    """Append-only KR observation; failure must not change orders or decisions."""
+    try:
+        if not entry_quality_capture_enabled():
+            return None
+        return build_entry_quality_context(
+            market="KR",
+            scenario=scenario,
+            current_price=current_price,
+            cursor=cursor,
+            trigger_type=trigger_type,
+        )
+    except Exception as error:  # noqa: BLE001 - capture must remain fail-open
+        logger.warning(
+            "[ENTRY_QUALITY_CAPTURE][KR] context skipped: %s",
+            type(error).__name__,
+        )
+        return None
 
 
 class StockTrackingAgent:
@@ -1469,6 +1499,12 @@ class StockTrackingAgent:
                     scenario=scenario,
                     decision_context=decision_context,
                     portfolio_context={"slots_used": slots_used, "slots_max": getattr(self, "max_slots", 10)},
+                    entry_quality_context=_capture_entry_quality_context(
+                        cursor=getattr(self, "cursor", None),
+                        scenario=scenario,
+                        current_price=current_price,
+                        trigger_type=trigger_type,
+                    ),
                     source="kr_batch_watchlist",
                 )
             except Exception as context_error:
@@ -4208,6 +4244,12 @@ class StockTrackingAgent:
                                 "slots_used": current_slots,
                                 "slots_max": self.max_slots,
                             },
+                            entry_quality_context=_capture_entry_quality_context(
+                                cursor=getattr(self, "cursor", None),
+                                scenario=scenario,
+                                current_price=current_price,
+                                trigger_type=(getattr(self, "trigger_info_map", {}).get(ticker, {}) or {}).get("trigger_type"),
+                            ),
                             source="kr_batch_decision",
                         )
 

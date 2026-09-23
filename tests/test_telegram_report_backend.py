@@ -36,7 +36,7 @@ def test_consultation_timeout_is_preserved(monkeypatch):
         finally:
             cancelled.append(True)
     monkeypatch.setattr(codex_subscription, "run_with_registry", never)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(asyncio.TimeoutError):
         asyncio.run(report_generator._generate_telegram_text(
             agent=ReportAgent("evaluation_agent", "prompt"), message="q", max_tokens=100,
             timeout_seconds=0.01))
