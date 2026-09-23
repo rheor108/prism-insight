@@ -568,6 +568,11 @@ export interface ObservabilityDeploymentImpact extends ObservabilityDeployment {
 }
 
 export interface ObservabilityInsightsSnapshot {
+  source?: {
+    kind: "local_jsonl" | "clickhouse"
+    invalid_lines?: number
+    incomplete_tail_lines?: number
+  }
   schema_version: number
   generated_at: string
   retention_days: number

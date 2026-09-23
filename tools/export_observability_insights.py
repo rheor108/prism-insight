@@ -1,4 +1,4 @@
-"""Build a sanitized dashboard snapshot from PRISM ClickHouse events."""
+"""Build a sanitized dashboard snapshot from ClickHouse or a local event spool."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import http.client
 import json
 import os
 import statistics
+import tempfile
 import urllib.parse
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -59,6 +60,10 @@ def _parse_time(value: Any, *, default_timezone=KST) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=default_timezone)
     return parsed.astimezone(timezone.utc)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _mean(values: list[float]) -> float | None:
@@ -278,10 +283,11 @@ def _market_snapshot(
     quality_components = {
         component: Counter(
             str(
-                event.get("attributes", {})
-                .get("entry_quality_context", {})
-                .get(component, {})
-                .get("status")
+                _mapping(
+                    event.get("attributes", {})
+                    .get("entry_quality_context", {})
+                    .get(component)
+                ).get("status")
                 or "MISSING"
             )
             for event in captured_quality_events
@@ -292,8 +298,7 @@ def _market_snapshot(
         event
         for event in candidate_context_events
         if isinstance(
-            event.get("attributes", {})
-            .get("policy_context", {})
+            _mapping(event.get("attributes", {}).get("policy_context"))
             .get("journal_influence_context"),
             Mapping,
         )
@@ -308,13 +313,13 @@ def _market_snapshot(
     for event in captured_journal_events:
         policy = event.get("attributes", {}).get("policy_context", {})
         journal = policy.get("journal_influence_context", {})
-        reflection = policy.get("journal_reflection", {})
+        reflection = _mapping(policy.get("journal_reflection"))
         status = str(journal.get("status") or "MISSING").upper()
         journal_statuses[status] += 1
         journal_enabled_count += bool(journal.get("enabled"))
         journal_input_present_count += bool(journal.get("input_hash"))
         journal_referenced_count += bool(reflection.get("referenced"))
-        effect = journal.get("deterministic_effect", {})
+        effect = _mapping(journal.get("deterministic_effect"))
         journal_adjustment_count += bool(effect.get("applied_adjustment"))
         crossing = str(effect.get("threshold_crossing") or "").upper()
         if crossing:
@@ -336,9 +341,7 @@ def _market_snapshot(
     ]
     fill_statuses = Counter(
         str(
-            event.get("attributes", {})
-            .get("fill_provenance", {})
-            .get("status")
+            _mapping(event.get("attributes", {}).get("fill_provenance")).get("status")
             or "UNKNOWN"
         )
         for event in fill_events
@@ -698,19 +701,81 @@ def load_clickhouse_events(
     return events
 
 
+def load_jsonl_events(
+    path: Path, *, days: int = 180, now: datetime | None = None
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Read local sanitized events, tolerating a writer's incomplete final line."""
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = current - timedelta(days=max(1, days))
+    events = []
+    diagnostics = {"invalid_lines": 0, "incomplete_tail_lines": 0}
+    valid_lines = 0
+    with path.open("rb") as stream:
+        # Read only the bytes present at open, never chase the live appender.
+        boundary = os.fstat(stream.fileno()).st_size
+        while stream.tell() < boundary:
+            line = stream.readline(boundary - stream.tell())
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                key = "invalid_lines" if line.endswith(b"\n") else "incomplete_tail_lines"
+                diagnostics[key] += 1
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get("attributes", {}), dict):
+                diagnostics["invalid_lines"] += 1
+                continue
+            observed = _parse_time(event.get("timestamp"))
+            if not event.get("event_id") or observed is None:
+                diagnostics["invalid_lines"] += 1
+                continue
+            valid_lines += 1
+            if event.get("event_type") in EVENT_TYPES and cutoff <= observed <= current:
+                events.append(event)
+    if not valid_lines and sum(diagnostics.values()):
+        raise ValueError("local event spool contains no complete valid events")
+    return events, diagnostics
+
+
 def write_snapshot(path: Path, snapshot: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}-", suffix=".tmp", dir=path.parent
     )
-    temporary.chmod(0o644)
-    temporary.replace(path)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(snapshot, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o644)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def export_local_snapshot(
+    input_path: Path, output_path: Path, *, days: int = 180,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Publish aggregate-only JSON without network, broker or model access."""
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("snapshot output must not overwrite the event spool")
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    events, diagnostics = load_jsonl_events(input_path, days=days, now=current)
+    snapshot = build_snapshot(events, now=current, retention_days=max(1, days))
+    snapshot["source"] = {"kind": "local_jsonl", **diagnostics}
+    write_snapshot(output_path, snapshot)
+    return snapshot
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input", type=Path,
+        help="Read the local sanitized JSONL spool instead of querying ClickHouse",
+    )
     parser.add_argument(
         "--endpoint",
         default=os.getenv("CLICKHOUSE_HTTP_ENDPOINT", "http://127.0.0.1:18123"),
@@ -725,14 +790,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=180)
     args = parser.parse_args(argv)
 
-    events = load_clickhouse_events(
-        args.endpoint,
-        user=os.getenv("CLICKHOUSE_USER", "prism_otel"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-        days=args.days,
-    )
-    snapshot = build_snapshot(events, retention_days=max(1, args.days))
-    write_snapshot(args.output, snapshot)
+    if args.input is not None:
+        snapshot = export_local_snapshot(args.input, args.output, days=args.days)
+    else:
+        events = load_clickhouse_events(
+            args.endpoint,
+            user=os.getenv("CLICKHOUSE_USER", "prism_otel"),
+            password=os.getenv("CLICKHOUSE_PASSWORD", ""),
+            days=args.days,
+        )
+        snapshot = build_snapshot(events, retention_days=max(1, args.days))
+        write_snapshot(args.output, snapshot)
     print(
         json.dumps(
             {

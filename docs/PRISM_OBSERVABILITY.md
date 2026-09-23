@@ -136,6 +136,37 @@ The existing dashboard reads /observability_insights.json independently from
 its portfolio JSON. Missing or delayed observability data hides only the new
 panel and never breaks the existing dashboard.
 
+### Local dashboard (localhost)
+
+A local dashboard can use its own event spool without ClickHouse or SSH:
+
+```bash
+.venv/bin/python tools/export_observability_insights.py \
+  --input logs/prism_events.jsonl \
+  --output examples/dashboard/public/observability_insights.json
+```
+
+Open `http://localhost:3000/?tab=insights` and select KR or US. The observation
+panel labels this source as a local snapshot and shows its export time. The
+snapshot contains aggregates, not raw prompts or credentials. Entry-quality
+coverage starts at the first captured context; older candidate records are
+counted separately and do not become quality samples retroactively.
+
+For automatic updates, add `--observability-input logs/prism_events.jsonl` to
+existing `examples/generate_dashboard_json.py` cron commands (the US generator
+supports the same option). On the local host these run weekdays at 11:05 and
+17:10 KST. Each export includes both markets from that host's spool. Disabled
+US jobs do not need to be enabled. Without the option, the existing ClickHouse
+publication path remains unchanged.
+
+Export runs before portfolio generation. Missing or unreadable input preserves
+the last good snapshot and does not stop portfolio updates. Malformed lines and
+an incomplete append tail are excluded with diagnostic counts; wholly invalid
+input fails without replacing the previous snapshot. Writes use unique temporary
+files and atomic replacement. Restart the Next.js service after first creating
+a previously absent public file. This connection displays observations only;
+it does not promote or execute entry rules.
+
 ## Rollback
 
 1. Stop and disable `prism-observability-shipper` and tunnel units.
