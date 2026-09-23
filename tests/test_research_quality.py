@@ -38,11 +38,11 @@ def checked(item, **window):
 def test_supported_number_in_korean_excerpt_is_retained():
     result = checked(claim())
     assert result.status == 'SUPPORTED'
-    assert result.value == '127.5'
+    assert result.value == 127.5
     assert '127.5조원' in quality.render(packet(), [result])
 
 
-@pytest.mark.parametrize('change', ['missing_source', 'not_opened', 'future', 'wrong_number', 'no_unit', 'no_period', 'range', 'nonfinite'])
+@pytest.mark.parametrize('change', ['missing_source', 'not_opened', 'future', 'wrong_number', 'no_unit', 'no_period', 'nonfinite'])
 def test_incomplete_numeric_evidence_never_reaches_parent_as_supported(change):
     c = claim()
     if change == 'missing_source': c['sources'] = []
@@ -51,7 +51,6 @@ def test_incomplete_numeric_evidence_never_reaches_parent_as_supported(change):
     elif change == 'wrong_number': c['value'] = '120.8'
     elif change == 'no_unit': c['unit'] = None
     elif change == 'no_period': c['period'] = None
-    elif change == 'range': c['value'] = '120-130'
     elif change == 'nonfinite': c['value'] = 'NaN'
     result = checked(c)
     assert result.status == 'UNVERIFIED'
@@ -167,3 +166,30 @@ def test_credential_bearing_url_is_not_rendered_as_verified_source():
     result = checked(c)
     assert result.status == 'UNVERIFIED'
     assert 'secret' not in quality.render(packet(), [result])
+
+
+@pytest.mark.parametrize('value', ['2026-09-16', 'increase', '120-130'])
+def test_non_numeric_metadata_cannot_be_used_as_a_numeric_value(value):
+    with pytest.raises(ValidationError):
+        quality.Claim.model_validate(claim(value=value))
+
+
+@pytest.mark.parametrize('value,excerpt,expected', [
+    (3.75, 'target range of 3-3/4 to 4 percent', 'SUPPORTED'),
+    (4, 'target range of 3-3/4 percent', 'UNVERIFIED'),
+    (0.25, '1/4 percentage point increase', 'SUPPORTED'),
+    (25, '1/4 percentage point increase', 'UNVERIFIED'),
+    (3, '1/4 percentage point increase', 'UNVERIFIED'),
+])
+def test_source_fractions_are_compared_as_whole_values(value, excerpt, expected):
+    c = claim(value=value)
+    c['sources'][0]['excerpt'] = excerpt
+    assert checked(c).status == expected
+
+
+def test_dates_and_directions_are_reviewed_without_numeric_metadata():
+    c = claim(value=None, unit=None, statement='2026년 9월 16일 인상했습니다.')
+    c['sources'][0]['excerpt'] = 'September 16, 2026. The Committee decided to raise the target range.'
+    result = checked(c)
+    assert result.status == 'SUPPORTED'
+    assert '원문 수치' not in quality.render(packet(), [result])

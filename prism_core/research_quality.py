@@ -32,7 +32,9 @@ class Claim(BaseModel):
     statement: str = Field(max_length=700)
     status: Status
     kind: Literal['fact', 'forecast', 'analysis', 'unconfirmed_report']
-    value: str | None = Field(default=None, max_length=80)
+    value: float | None = Field(default=None, description=(
+        'Numeric quantity in the source unit, or null. Dates, directions and text use null. '
+        'For a 1/4 percentage point change use 0.25 with unit percentage points, not 25.'))
     unit: str | None = Field(default=None, max_length=100)
     period: str | None = Field(default=None, max_length=100)
     sources: list[Evidence] = Field(max_length=3)
@@ -60,7 +62,9 @@ use original reporting and distinguish company confirmation, forecasts and unnam
 Open the actual source pages; search snippets alone are not source verification.
 Produce one claim per requested fact, with stable IDs, exact numeric value in the SOURCE's
 unit (not a converted number), unit and period where applicable. value must be a single
-numeric literal or null; express ranges as separate claims. Each evidence excerpt must
+JSON number or null; dates, directions and other text MUST use null. Express ranges as
+separate claims. Use decimal equivalents for source fractions (3-3/4 = 3.75;
+1/4 percentage point = value 0.25, unit percentage points). Each evidence excerpt must
 contain the supporting value/context. Keep excerpts short (at most 25 quoted words per
 source URL in total). Prefer one direct source per claim; reuse pages already opened.
 SUPPORTED means source-supported, not that a media forecast became a company fact.
@@ -90,11 +94,23 @@ is not proof that a claim is false or unpublished. Reject future publications an
 articles when a publication window was requested. Distinguish original publication from an
 updated page or translated republication. Separate fact, forecast, analysis and unconfirmed
 report. Do not add new topics. Correct any unsupported clause rather than retaining it.
+value MUST be a JSON number or null, never a date or text. For dates/directions set value
+to null. Convert only source fractions to decimals: 3-3/4 is 3.75; 1/4 percentage point
+is value 0.25 with unit percentage points, even if the statement expresses 25bp.
 If a fact cannot be checked, return UNVERIFIED. Do not execute actions. Return JSON only.'''
 
 
 def _numbers(text: str) -> set[Decimal]:
     found = set()
+    # Treat mixed/simple fractions as whole tokens; do not accept their components
+    # as separately evidenced numbers (e.g. 3-3/4 does not support a value of 4).
+    fraction = r'(?<![\w./])(?:(\d+)[- ])?(\d+)/(\d+)(?![\d/])'
+    def take_fraction(match):
+        whole, numerator, denominator = match.groups()
+        if int(denominator):
+            found.add(Decimal(whole or 0) + Decimal(numerator) / Decimal(denominator))
+        return ' ' * len(match.group())
+    text = re.sub(fraction, take_fraction, text)
     for token in re.findall(r'(?<![\d.])[+-]?\d[\d,]*(?:\.\d+)?(?![\d.])', text):
         try:
             found.add(Decimal(token.replace(',', '')))
@@ -126,7 +142,7 @@ def checked_claims(packet: ResearchPacket, review: ResearchReview) -> list[Claim
             valid = bool(sources)
             if claim.value is not None:
                 try:
-                    value = Decimal(claim.value.replace(',', ''))
+                    value = Decimal(str(claim.value))
                     valid = valid and value.is_finite() and bool(claim.unit) and bool(claim.period)
                     valid = valid and any(value in _numbers(s.excerpt) for s in sources)
                 except InvalidOperation:
