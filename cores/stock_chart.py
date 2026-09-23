@@ -88,7 +88,7 @@ def configure_korean_font():
         for font_name in korean_font_list:
             try:
                 # Search installed system fonts by name
-                font_path = fm.findfont(fm.FontProperties(family=font_name))
+                font_path = fm.findfont(fm.FontProperties(family=font_name), fallback_to_default=False)
                 if font_path and not font_path.endswith('afm'):
                     # Set matplotlib global font configuration
                     plt.rcParams['font.family'] = font_name
@@ -141,6 +141,7 @@ def configure_korean_font():
         # Common font paths (for manual installations)
         common_paths = [
             '/usr/share/fonts/NanumGothic.ttf',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
             '/usr/local/share/fonts/NanumGothic.ttf',
             '/home/*/fonts/NanumGothic.ttf',
             '/home/*/.fonts/NanumGothic.ttf',
@@ -165,8 +166,8 @@ def configure_korean_font():
                                 KOREAN_FONT_PROP = fm.FontProperties(fname=match_path)
 
                                 # Set matplotlib global font configuration
-                                plt.rcParams['font.family'] = 'NanumGothic'
-                                mpl.rcParams['font.family'] = 'NanumGothic'
+                                plt.rcParams['font.family'] = KOREAN_FONT_PROP.get_name()
+                                mpl.rcParams['font.family'] = KOREAN_FONT_PROP.get_name()
 
                                 logger.info(f"Korean font configured: {match_path}")
                                 return match_path
@@ -189,8 +190,8 @@ def configure_korean_font():
                             KOREAN_FONT_PROP = fm.FontProperties(fname=path)
 
                             # Set matplotlib global font configuration
-                            plt.rcParams['font.family'] = 'NanumGothic'
-                            mpl.rcParams['font.family'] = 'NanumGothic'
+                            plt.rcParams['font.family'] = KOREAN_FONT_PROP.get_name()
+                            mpl.rcParams['font.family'] = KOREAN_FONT_PROP.get_name()
 
                             logger.info(f"Korean font configured: {path}")
                             return path
@@ -216,7 +217,7 @@ def configure_korean_font():
 
         for font_name in korean_font_names:
             try:
-                font_path = fm.findfont(fm.FontProperties(family=font_name))
+                font_path = fm.findfont(fm.FontProperties(family=font_name), fallback_to_default=False)
                 if font_path and not font_path.endswith('.afm') and os.path.exists(font_path):
                     # Set matplotlib global font configuration
                     plt.rcParams['font.family'] = font_name
@@ -1459,12 +1460,15 @@ def _detect_index_ticker(ticker: str) -> str:
     """
     global _KOSPI_TICKERS_CACHE
     try:
-        from pykrx import stock as _pykrx_stock
+        import krx_data_client as _krx_stock
 
         if _KOSPI_TICKERS_CACHE is None:
             _KOSPI_TICKERS_CACHE = set(
-                _pykrx_stock.get_market_ticker_list(market="KOSPI")
+                _krx_stock.get_market_ticker_list(market="KOSPI")
             )
+        if not _KOSPI_TICKERS_CACHE:
+            _KOSPI_TICKERS_CACHE = None
+            raise ValueError("Empty KOSPI listing")
         if ticker in _KOSPI_TICKERS_CACHE:
             return _KOSPI_INDEX_TICKER
         return _KOSDAQ_INDEX_TICKER

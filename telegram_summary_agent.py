@@ -64,6 +64,9 @@ class _RobustEvaluatorLLM:
             return await self._llm.generate_structured(message, response_model, request_params)
         except Exception as e:
             log_openai_error(logger, e, "telegram summary evaluator structured generation")
+            from prism_core.inference_errors import should_retry
+            if not should_retry(e):
+                raise
             logger.warning(f"generate_structured failed ({e}), retrying with JSON extraction fallback")
             text = await self._llm.generate_str(message=message, request_params=request_params)
             candidate = _extract_last_valid_json(text)
@@ -108,7 +111,7 @@ class TelegramSummaryGenerator:
         """
         Extract ticker code, company name, date etc. from filename
         """
-        pattern = r'(\w+)_(.+)_(\d{8})_.*\.pdf'
+        pattern = r'^([^_]+)_(.+)_(\d{8})_.*\.pdf$'
         match = re.match(pattern, filename)
 
         if match:

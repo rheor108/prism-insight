@@ -1,5 +1,7 @@
+from cores.report_integrity import source_contract, validate_sections
 from prism_core.ai_models import REPORT_STAGES
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from prism_core.inference_errors import should_retry
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from cores.agents.report_agent import ReportAgent
 from report_model_config import REPORT_EFFORT, REPORT_MODEL
 from cores.openai_error_logging import log_openai_error
@@ -28,7 +30,8 @@ LANGUAGE_NAMES = {
 @retry(
     stop=stop_after_attempt(2),  # Maximum 2 attempts (initial + 1 retry)
     wait=wait_exponential(multiplier=1, min=10, max=30),  # Exponentially increasing wait time
-    retry=retry_if_exception_type(Exception)  # Retry on all exceptions
+    retry=retry_if_exception(should_retry),
+    reraise=True
 )
 async def generate_report(agent, section, company_name, company_code, reference_date, logger, language="ko"):
     """
@@ -110,7 +113,7 @@ async def generate_report(agent, section, company_name, company_code, reference_
     try:
         report = await _generate_agent_text(
             agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
             stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=10,
@@ -118,6 +121,7 @@ async def generate_report(agent, section, company_name, company_code, reference_
     except Exception as e:
         log_openai_error(logger, e, f"report generation for {section}")
         raise
+    validate_sections({section: report}, [section])
     logger.info(f"Completed {section} - {len(report)} characters")
     return report
 
@@ -199,7 +203,7 @@ async def generate_market_report(agent, section, reference_date, logger, languag
     try:
         report = await _generate_agent_text(
             agent,
-            message,
+            message + source_contract("market indices", "market", reference_date),
             stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=3,
@@ -207,6 +211,7 @@ async def generate_market_report(agent, section, reference_date, logger, languag
     except Exception as e:
         log_openai_error(logger, e, f"market report generation for {section}")
         raise
+    validate_sections({section: report}, [section])
     logger.info(f"Completed {section} - {len(report)} characters")
     return report
 
@@ -304,19 +309,17 @@ Comprehensive Analysis Report:
 
         executive_summary = await _generate_agent_text(
             summary_agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
             stage="report_summary",
             max_tokens=16000,
             max_iterations=2,
         )
+        validate_sections({"summary": executive_summary}, ["summary"])
         return executive_summary
     except Exception as e:
         log_openai_error(logger, e, f"executive summary generation for {company_name}")
         logger.error(f"Error generating executive summary: {e}")
-        if language == "ko":
-            return "## 핵심 요약\n\n분석 요약을 생성하는 데 문제가 발생했습니다."
-        else:
-            return "## Executive Summary\n\nA problem occurred while generating the analysis summary."
+        raise
 
 
 async def generate_investment_strategy(section_reports, combined_reports, company_name, company_code, reference_date, logger, language="ko"):
@@ -533,11 +536,12 @@ Please present a consistent and executable investment strategy that investors ca
 
         investment_strategy = await _generate_agent_text(
             investment_strategy_agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
             stage="strategy",
             max_tokens=32000,
             max_iterations=3,
         )
+        validate_sections({"investment_strategy": investment_strategy}, ["investment_strategy"])
         logger.info(f"Completed investment_strategy - {len(investment_strategy)} characters")
         return investment_strategy
     except Exception as e:

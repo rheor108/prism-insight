@@ -268,6 +268,7 @@ async def run_stage(stage, instruction, message, *, provider=None, response_mode
              stage,choice.model,choice.effort,choice.provider)
     async with asyncio.timeout(choice.timeout_seconds):
         native_web_corrections = 0
+        empty_answer_retries = 0
         for _ in range(choice.max_tool_rounds):
             payload = {'instructions':instruction,'tools':list(catalog.values()),'conversation':history}
             result = await _invoke(choice, prefix+json.dumps(payload,ensure_ascii=False,default=str),
@@ -276,8 +277,17 @@ async def run_stage(stage, instruction, message, *, provider=None, response_mode
             if not calls:
                 answer = result['answer']
                 if not answer.strip():
-                    raise ValueError('Codex returned an empty final answer')
+                    if empty_answer_retries < 1:
+                        empty_answer_retries += 1
+                        log.warning('[AI_EMPTY_ANSWER] stage=%s retry=1', stage)
+                        history.append({'role':'user','content':'The previous answer was empty. Return a complete answer, or explicitly explain missing evidence. Do not invent data.'})
+                        continue
+                    raise ValueError('Codex returned an empty final answer after one retry')
                 if response_model:
+                    # Accept a single JSON fence, never extract an arbitrary substring.
+                    fenced = re.fullmatch(r'\s*```(?:json)?\s*\n(.*?)\n```\s*', answer, re.S)
+                    if fenced:
+                        answer = fenced.group(1).strip()
                     response_model.model_validate_json(answer)
                 return answer
             if len(calls)>20:

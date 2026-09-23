@@ -1,3 +1,4 @@
+from cores.report_integrity import validate_sections
 import os
 import asyncio
 from collections.abc import Mapping
@@ -184,6 +185,8 @@ async def analyze_stock(company_code: str = "000660", company_name: str = "SK하
                         logger.error(f"Final failure processing {section}: {e}")
                         section_reports[section] = f"Analysis failed: {section}"
 
+        validate_sections(section_reports, base_sections)
+
         # 6. Integrate content from other reports
         combined_reports = ""
         for section in base_sections:
@@ -203,6 +206,8 @@ async def analyze_stock(company_code: str = "000660", company_name: str = "SK하
         except Exception as e:
             logger.error(f"Error processing investment_strategy: {e}")
             section_reports["investment_strategy"] = "Investment strategy analysis failed"
+
+        validate_sections(section_reports, base_sections + ["investment_strategy"])
 
         # 8. Generate comprehensive report including all sections
         all_reports = ""
@@ -238,7 +243,7 @@ async def analyze_stock(company_code: str = "000660", company_name: str = "SK하
             executive_summary = executive_summary.lstrip('\n')
         except Exception as e:
             logger.error(f"Error generating executive summary: {e}")
-            executive_summary = "## 핵심 요약\n\n요약 생성 중 오류가 발생했습니다." if language == "ko" else "## Executive Summary\n\nProblem occurred while generating analysis summary."
+            raise
 
         # 10. Generate charts
         charts_dir = os.path.join("../charts", f"{company_code}_{reference_date}")

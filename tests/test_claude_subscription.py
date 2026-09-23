@@ -79,7 +79,7 @@ async def test_api_auth_is_rejected_and_metrics_mark_unknown(monkeypatch):
     monkeypatch.setattr(claude.shutil, 'which', lambda _: '/bin/true')
     events = []
     monkeypatch.setattr(claude.metrics, 'emit', events.append)
-    with pytest.raises(RuntimeError, match='subscription login'):
+    with pytest.raises(RuntimeError, match='claude_authentication'):
         await claude.invoke(settings('news'), 'test')
     assert spawn.await_count == 1
     assert events[0]['outcome'] == 'failure'
