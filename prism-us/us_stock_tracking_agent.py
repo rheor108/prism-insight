@@ -4119,6 +4119,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
 
                     if entry_eligible:
                         # is_add => pyramiding additional independent row (#288)
+                        entry_message_start = len(self.message_queue)
                         buy_result = await self._buy_stock_with_position(
                             ticker,
                             company_name,
@@ -4169,6 +4170,10 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                                             account_key=account_key,
                                             intent_id=persisted_intent_id,
                                         )
+                                    from prism_core.failed_entries import compensate_agent_rejection
+                                    if compensate_agent_rejection(self, "US", buy_result.legacy_holding_id, trade_result, entry_message_start):
+                                        logger.warning("ENTRY_REJECTED_COMPENSATED: market=US ticker=%s", ticker)
+                                        continue
                                     emit_fill_reconciliation(
                                         market="US",
                                         ticker=ticker,

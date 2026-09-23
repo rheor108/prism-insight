@@ -12,7 +12,7 @@ import trading.domestic_stock_trading as domestic_trading
 from prism_core.order_intents import IntentStore
 from prism_core.positions import InvalidPositionTransition, PositionStore
 from stock_tracking_agent import StockTrackingAgent
-from tracking.db_schema import TABLE_STOCK_HOLDINGS
+from tracking.db_schema import TABLE_STOCK_HOLDINGS, TABLE_TRADING_HISTORY
 
 
 def _entry_state(db_path: Path) -> tuple[int, str | None, str | None]:
@@ -67,6 +67,7 @@ def _pending_entry_agent(db_path: Path):
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     connection.execute(TABLE_STOCK_HOLDINGS)
+    connection.execute(TABLE_TRADING_HISTORY)
     PositionStore(connection).ensure_schema()
     connection.commit()
     IntentStore(db_path)
@@ -89,6 +90,8 @@ def _pending_entry_agent(db_path: Path):
     # The production gate consumes a computed snapshot; keep this DB-only
     # lifecycle fixture deterministic and network-free.
     agent._buy_floor_regime = lambda: "strong_bull"
+    # Exercise entry lifecycle rather than unrelated production screening gates.
+    agent._evaluate_production_buy_gate = lambda *a, **kw: {"allowed": True}
 
     async def analyze_report(_report_path):
         return {
@@ -127,6 +130,14 @@ def _install_pending_entry_runtime(
     broker_started: asyncio.Event | None = None,
     broker_release: asyncio.Event | None = None,
 ):
+    # Test local SQLite lifecycle with cooperative scheduling; do not mix
+    # nest_asyncio with executor callbacks or call production data providers.
+    async def local_io(func, *args, **kwargs):
+        await asyncio.sleep(0)
+        return func(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "to_thread", local_io)
+    from cores import regime_policy
+    monkeypatch.setattr(regime_policy, "get_market_pulse_state", lambda *a, **kw: "UPTREND")
     broker_calls = []
     publish_states = []
     redis_calls = []
@@ -812,5 +823,28 @@ def test_pending_entry_requires_explicit_successful_ledger_readiness(
     try:
         with pytest.raises(RuntimeError, match="initialization is not ready"):
             agent._require_pending_entry_ready()
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('accepted', [False, True])
+async def test_legacy_live_entry_rejection_does_not_become_a_holding(monkeypatch, tmp_path, accepted):
+    db_path = tmp_path / 'legacy-live.sqlite'
+    agent, connection = _pending_entry_agent(db_path)
+    agent.account_configs = [{'name': 'test-live', 'account_key': 'prod:test:01'}]
+    broker_result = ({'success': True, 'message': 'submitted', 'order_no': 'TEST-1'}
+                     if accepted else {'success': False, 'message': 'Buyable quantity is 0'})
+    calls, _, redis, gcp = _install_pending_entry_runtime(
+        monkeypatch, agent=agent, db_path=db_path, broker_result=broker_result)
+    monkeypatch.setenv('POSITION_PENDING_KR_ENABLED', 'false')
+    try:
+        result = await agent.process_reports(['report-a.pdf'])
+        assert len(calls) == 1
+        assert result == (int(accepted), 0)
+        assert connection.execute('SELECT count(*) FROM stock_holdings').fetchone()[0] == int(accepted)
+        assert connection.execute('SELECT status FROM positions').fetchone()[0] == ('OPEN' if accepted else 'ENTRY_FAILED')
+        assert bool(agent.message_queue) == accepted
+        assert bool(redis) == accepted and bool(gcp) == accepted
     finally:
         connection.close()

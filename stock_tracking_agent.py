@@ -4341,6 +4341,7 @@ class StockTrackingAgent:
                             )
                             continue
 
+                        entry_message_start = len(self.message_queue)
                         buy_result = await self._buy_stock_with_position(
                             ticker,
                             company_name,
@@ -4394,6 +4395,11 @@ class StockTrackingAgent:
                                     account_key=account_key,
                                     intent_id=persisted_intent_id,
                                 )
+
+                            from prism_core.failed_entries import compensate_agent_rejection
+                            if compensate_agent_rejection(self, "KR", buy_result.legacy_holding_id, trade_result, entry_message_start):
+                                logger.warning("ENTRY_REJECTED_COMPENSATED: market=KR ticker=%s", ticker)
+                                continue
 
                             if trade_result['success']:
                                 logger.info(f"Actual purchase successful: {trade_result['message']}")
