@@ -1118,46 +1118,50 @@ def auth(
     p["appkey"] = app_key
     p["appsecret"] = app_secret
 
-    # Check for existing valid token (per-account if account_key provided)
-    saved_token = read_token(account_key=account_key)
+    # Serialize check/issue/save for the same API identity across processes.
+    # Saving alone is too late: contenders must re-read after taking the lock.
+    auth_hash = hashlib.sha256(f"{svr}:{app_key}".encode()).hexdigest()[:16]
+    with CrossPlatformFileLock(os.path.join(config_root, f".auth_{auth_hash}.lock"), timeout=90):
+        # Check for existing valid token (per-account if account_key provided)
+        saved_token = read_token(account_key=account_key)
 
-    if saved_token is None:
-        # No valid token - request new one
-        token_url = f"{_cfg[svr]}/oauth2/tokenP"
-        logging.info(f"Requesting new token from KIS API ({svr} mode)...")
+        if saved_token is None:
+            # No valid token - request new one
+            token_url = f"{_cfg[svr]}/oauth2/tokenP"
+            logging.info(f"Requesting new token from KIS API ({svr} mode)...")
 
-        try:
-            # Use retry logic for transient failures
-            result = _request_token_with_retry(token_url, p, _getBaseHeader())
+            try:
+                # Use retry logic for transient failures
+                result = _request_token_with_retry(token_url, p, _getBaseHeader())
 
-            my_token = result.get("access_token")
-            my_expired = result.get("access_token_token_expired")
+                my_token = result.get("access_token")
+                my_expired = result.get("access_token_token_expired")
 
-            if not my_token or not my_expired:
-                raise TokenRequestError(
-                    "Invalid response from KIS API: missing token or expiry",
-                    status_code=200,
-                    response_text=str(result)
-                )
+                if not my_token or not my_expired:
+                    raise TokenRequestError(
+                        "Invalid response from KIS API: missing token or expiry",
+                        status_code=200,
+                        response_text=str(result)
+                    )
 
-            # Save the new token (per-account if account_key provided)
-            save_token(my_token, my_expired, account_key=account_key)
-            logging.info(f"✅ New token obtained and saved (expires: {my_expired})")
+                # Save the new token (per-account if account_key provided)
+                save_token(my_token, my_expired, account_key=account_key)
+                logging.info(f"✅ New token obtained and saved (expires: {my_expired})")
 
-        except TokenRequestError as e:
-            logging.error(f"❌ Token request failed: {e}")
-            logging.error(f"   Status Code: {e.status_code}")
-            logging.error(f"   Response: {e.response_text}")
-            # Re-raise with clear error message
-            raise
+            except TokenRequestError as e:
+                logging.error(f"❌ Token request failed: {e}")
+                logging.error(f"   Status Code: {e.status_code}")
+                logging.error(f"   Response: {e.response_text}")
+                # Re-raise with clear error message
+                raise
 
-        except Exception as e:
-            logging.error(f"❌ Unexpected error during token request: {e}")
-            raise TokenRequestError(f"Unexpected error: {e}")
+            except Exception as e:
+                logging.error(f"❌ Unexpected error during token request: {e}")
+                raise TokenRequestError(f"Unexpected error: {e}")
 
-    else:
-        my_token = saved_token
-        logging.info("✅ Using existing valid token")
+        else:
+            my_token = saved_token
+            logging.info("✅ Using existing valid token")
 
     # Set up environment with token
     changeTREnv(

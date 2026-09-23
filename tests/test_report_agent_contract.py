@@ -63,8 +63,8 @@ def test_company_and_news_agents_preserve_tool_servers():
     )
     news = create_news_analysis_agent("SK하이닉스", "000660", "20260718")
 
-    _assert_agent(status, "company_status_agent", ["firecrawl"])
-    _assert_agent(overview, "company_overview_agent", ["firecrawl"])
+    _assert_agent(status, "company_status_agent", ["firecrawl", "perplexity"])
+    _assert_agent(overview, "company_overview_agent", ["firecrawl", "perplexity"])
     _assert_agent(news, "news_analysis_agent", ["perplexity", "firecrawl"])
 
 

@@ -531,14 +531,26 @@ class StockAnalysisOrchestrator:
                                 name_col = "Company Name"
                             elif "종목명" in stocks_df.columns:
                                 name_col = "종목명"
+                            elif "stock_name" in stocks_df.columns:
+                                name_col = "stock_name"
+                            elif "name" in stocks_df.columns:
+                                name_col = "name"
+                            elif "Name" in stocks_df.columns:
+                                name_col = "Name"
 
                             if name_col:
                                 name = stocks_df.loc[ticker, name_col]
-                            # Fallback: use pykrx API if name is empty
+                            if not name:
+                                for candidates in self.selected_tickers.get(mode, {}).values():
+                                    if isinstance(candidates, list):
+                                        for candidate in candidates:
+                                            if isinstance(candidate, dict) and str(candidate.get('code')) == str(ticker):
+                                                name = candidate.get('name') or ''
+                            # Fallback: use the configured market-data sources if name is empty
                             if not name:
                                 try:
-                                    from pykrx import stock as stock_api
-                                    name = stock_api.get_market_ticker_name(ticker) or ""
+                                    from cores.market_data import get_market_ticker_name
+                                    name = get_market_ticker_name(ticker) or ""
                                 except Exception:
                                     pass
 
@@ -1436,6 +1448,16 @@ class StockAnalysisOrchestrator:
             else:
                 ticker = ticker_info
                 company_name = f"Stock_{ticker}"
+
+            if not isinstance(company_name, str) or company_name.startswith("Stock_"):
+                try:
+                    from cores.market_data import get_market_ticker_name
+                    company_name = await asyncio.to_thread(get_market_ticker_name, ticker)
+                except Exception:
+                    company_name = ""
+                if not company_name or str(company_name).startswith("Stock_"):
+                    logger.error("REPORT_IDENTITY_UNAVAILABLE: ticker=%s", ticker)
+                    return None
 
             logger.info(f"[{idx}/{len(tickers)}] Starting stock analysis: {company_name}({ticker})")
 
