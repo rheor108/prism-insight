@@ -234,6 +234,20 @@ def _tool_dict(tool):
 
 async def run_stage(stage, instruction, message, *, provider=None, response_model=None,
                     images=(), web_search=False, variant=None):
+    if stage == 'research' and web_search and response_model is None:
+        if provider is not None or images or variant is not None:
+            raise ValueError('Evidence research does not accept parent tools, images or variants')
+        from prism_core.research_quality import research
+        # Collection and review share the original stage deadline.
+        async with asyncio.timeout(settings(stage).timeout_seconds):
+            return await research(_run_stage, instruction, message)
+    return await _run_stage(stage, instruction, message, provider=provider,
+                            response_model=response_model, images=images,
+                            web_search=web_search, variant=variant)
+
+
+async def _run_stage(stage, instruction, message, *, provider=None, response_model=None,
+                     images=(), web_search=False, variant=None):
     choice = settings(stage, variant=variant)
     if not choice.enabled:
         raise RuntimeError(f'AI stage is disabled: {stage}')

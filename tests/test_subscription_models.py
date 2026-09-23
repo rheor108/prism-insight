@@ -125,6 +125,11 @@ async def test_structured_evaluation_validated(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_external_research_does_not_call_paid_mcp(monkeypatch):
+    # This test isolates MCP routing/protocol; quality pipeline has its own integration tests.
+    from prism_core import research_quality
+    async def protocol_only(raw_runner, instruction, message):
+        return await raw_runner('research', instruction, message, web_search=True)
+    monkeypatch.setattr(research_quality, 'research', protocol_only)
     tools=Tools()
     tools.list_tools=AsyncMock(return_value=[SimpleNamespace(name='perplexity-ask',description='search',inputSchema={'type':'object'})])
     seen=[]
@@ -140,6 +145,11 @@ async def test_external_research_does_not_call_paid_mcp(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_macro_recovers_misrouted_native_search_without_executing_it(monkeypatch):
+    # This test isolates MCP routing/protocol; quality pipeline has its own integration tests.
+    from prism_core import research_quality
+    async def protocol_only(raw_runner, instruction, message):
+        return await raw_runner('research', instruction, message, web_search=True)
+    monkeypatch.setattr(research_quality, 'research', protocol_only)
     tools=Tools()
     tools.list_tools=AsyncMock(return_value=[SimpleNamespace(
         name='perplexity-ask',description='search',inputSchema={'type':'object'})])
@@ -168,7 +178,7 @@ async def test_native_search_correction_is_bounded(monkeypatch):
     fake=AsyncMock(return_value={'answer':'unfinished','calls':[{'name':'web__run','arguments':'{}'}]})
     monkeypatch.setattr(sub,'_invoke',fake)
     with pytest.raises(RuntimeError,match='after corrections'):
-        await sub.run_stage('research','Search','Query',web_search=True)
+        await sub._run_stage('research','Search','Query',web_search=True)
     assert fake.await_count==3
 
 
