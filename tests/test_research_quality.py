@@ -11,6 +11,11 @@ from prism_core import codex_subscription as sub
 from prism_core import research_quality as quality
 
 
+@pytest.fixture(autouse=True)
+def full_review_mode(monkeypatch):
+    monkeypatch.setenv('PRISM_RESEARCH_REVIEW_MODE', 'all')
+
+
 def claim(**updates):
     value = {
         'id': 'ds_revenue', 'requested_item': 'DS 매출', 'statement': 'DS 매출은 127.5조원입니다.',
@@ -222,3 +227,38 @@ def test_malformed_compact_verdict_is_rejected(action, replacement):
         'id': 'ds_revenue', 'action': action, 'replacement': replacement}])
     with pytest.raises(ValueError):
         quality.checked_claims(packet(), review)
+
+
+@pytest.mark.asyncio
+async def test_default_mode_checks_official_facts_without_a_second_search(monkeypatch):
+    monkeypatch.delenv('PRISM_RESEARCH_REVIEW_MODE')
+    runner = AsyncMock(return_value=packet().model_dump_json())
+    result = await quality.research(runner, '', 'query')
+    runner.assert_awaited_once()
+    assert '127.5조원' in result and '별도 원문 재검토 요청: 0개' in result
+
+
+@pytest.mark.asyncio
+async def test_targeted_review_includes_only_weak_evidence_and_merges_correction(monkeypatch):
+    monkeypatch.delenv('PRISM_RESEARCH_REVIEW_MODE')
+    weak = claim(id='memory_revenue', requested_item='메모리 매출', status='NOT_DISCLOSED', value=None)
+    corrected = claim(id='memory_revenue', statement='메모리 매출은 120.8조원입니다.', value=120.8)
+    corrected['sources'][0]['excerpt'] = '메모리 매출은 120.8조원입니다.'
+    runner = AsyncMock(side_effect=[packet([claim(), weak]).model_dump_json(), reviewed([corrected]).model_dump_json()])
+    result = await quality.research(runner, '', 'query')
+    assert [c['id'] for c in runner.call_args_list[1].args[2]['candidate_evidence']['claims']] == ['memory_revenue']
+    assert '127.5조원' in result and '120.8조원' in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['bad_numeric', 'media', 'forecast'])
+async def test_targeted_mode_does_not_skip_bad_numbers_or_nonofficial_claims(monkeypatch, change):
+    monkeypatch.delenv('PRISM_RESEARCH_REVIEW_MODE')
+    c = claim()
+    if change == 'bad_numeric': c['value'] = 999
+    elif change == 'media': c['sources'][0]['source_type'] = 'media'
+    else: c['kind'] = 'forecast'
+    runner = AsyncMock(side_effect=[packet([c]).model_dump_json(), RuntimeError('failed')])
+    result = await quality.research(runner, '', 'query')
+    assert runner.await_count == 2 and 'UNVERIFIED' in result
+    assert '127.5' not in result and '999' not in result

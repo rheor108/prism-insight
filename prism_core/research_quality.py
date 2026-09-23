@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import logging
+import os
 import re
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -177,8 +178,8 @@ def checked_claims(packet: ResearchPacket, review: ResearchReview) -> list[Claim
     return result
 
 
-def render(packet: ResearchPacket, claims: list[Claim]) -> str:
-    """Only reviewed, supported statements reach the parent; excerpts stay internal."""
+def render(packet: ResearchPacket, claims: list[Claim], *, review_count: int = 0) -> str:
+    """Only supported statements reach the parent; distinguish additional review."""
     lines = [f'검색 자료 점검 (기준일: {packet.as_of.isoformat()})']
     if packet.window_start:
         lines.append(f'보도일 범위: {packet.window_start.isoformat()} ~ {packet.as_of.isoformat()}')
@@ -200,12 +201,16 @@ def render(packet: ResearchPacket, claims: list[Claim]) -> str:
             for source in claim.sources:
                 published = source.published_date.isoformat() if source.published_date else '발표일 미확인'
                 lines.append(f'근거 ({source.source_type}, {published}): {source.url}')
-    lines.append('\n검토 방식: 모델의 원문 대조와 구조·수치 검사. 사실 정확성을 보증하지 않습니다.')
+    lines.append(f'\n검토 방식: 수집 시 원문 확인과 구조·수치 검사. '
+                 f'별도 원문 재검토 요청: {review_count}개 항목. 사실 정확성을 보증하지 않습니다.')
     return '\n'.join(lines)
 
 
 async def research(raw_runner, instruction, message) -> str:
-    """Two sequential passes; the caller provides their shared existing timeout."""
+    """Collect and check all items; selectively review under one shared deadline."""
+    mode = os.environ.get('PRISM_RESEARCH_REVIEW_MODE', 'targeted')
+    if mode not in {'targeted', 'all'}:
+        raise ValueError('PRISM_RESEARCH_REVIEW_MODE must be targeted or all')
     today = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
     raw = await raw_runner('research', COLLECT, {
         'today_kst': today, 'task_instructions': instruction, 'query': message,
@@ -215,16 +220,28 @@ async def research(raw_runner, instruction, message) -> str:
         raise ValueError('invalid research publication window')
     if len({c.id for c in packet.claims}) != len(packet.claims):
         raise ValueError('duplicate research item IDs')
+    initial = checked_claims(packet, ResearchReview(claims=[
+        ReviewedItem(id=c.id, action='accept') for c in packet.claims]))
+    # A model's official-source label is not an authenticity guarantee. Always
+    # apply deterministic checks, and spend the extra search pass on weak evidence.
+    targets = {c.id for c in initial if mode == 'all' or c.status != 'SUPPORTED'
+               or c.kind != 'fact' or not any(s.source_type == 'official' for s in c.sources)}
+    if not targets:
+        log.info('[RESEARCH_QUALITY] items=%d supported=%d review_items=0', len(initial), len(initial))
+        return render(packet, initial)
+    candidates = packet.model_copy(update={'claims': [c for c in packet.claims if c.id in targets]})
     try:
         raw_review = await raw_runner('research', VERIFY, {
             'query': message, 'task_instructions': instruction,
-            'candidate_evidence': packet.model_dump(mode='json'),
+            'candidate_evidence': candidates.model_dump(mode='json'),
         }, web_search=True, response_model=ResearchReview)
-        claims = checked_claims(packet, ResearchReview.model_validate_json(raw_review))
+        reviewed = checked_claims(candidates, ResearchReview.model_validate_json(raw_review))
     except (RuntimeError, ValueError):
         # Never release an unchecked draft as verified evidence; preserve cancellation/timeouts.
         log.warning('[RESEARCH_QUALITY] review_unavailable')
-        claims = [c.model_copy(update={'status': 'UNVERIFIED', 'sources': []}) for c in packet.claims]
-    log.info('[RESEARCH_QUALITY] items=%d supported=%d unresolved=%d', len(claims),
-             sum(c.status == 'SUPPORTED' for c in claims), sum(c.status != 'SUPPORTED' for c in claims))
-    return render(packet, claims)
+        reviewed = [c.model_copy(update={'status': 'UNVERIFIED', 'sources': []}) for c in candidates.claims]
+    by_id = {c.id: c for c in reviewed}
+    claims = [by_id.get(c.id, c) for c in initial]
+    log.info('[RESEARCH_QUALITY] items=%d supported=%d unresolved=%d review_items=%d', len(claims),
+             sum(c.status == 'SUPPORTED' for c in claims), sum(c.status != 'SUPPORTED' for c in claims), len(targets))
+    return render(packet, claims, review_count=len(targets))
