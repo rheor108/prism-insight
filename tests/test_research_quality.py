@@ -184,6 +184,8 @@ def test_non_numeric_metadata_cannot_be_used_as_a_numeric_value(value):
     (4, 'target range of 3-3/4 percent', 'UNVERIFIED'),
     (0.25, '1/4 percentage point increase', 'SUPPORTED'),
     (25, '1/4 percentage point increase', 'UNVERIFIED'),
+    (-0.25, '-1/4 percentage point', 'SUPPORTED'),
+    (0.25, '-1/4 percentage point', 'UNVERIFIED'),
     (3, '1/4 percentage point increase', 'UNVERIFIED'),
 ])
 def test_source_fractions_are_compared_as_whole_values(value, excerpt, expected):

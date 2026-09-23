@@ -116,11 +116,12 @@ def _numbers(text: str) -> set[Decimal]:
     found = set()
     # Treat mixed/simple fractions as whole tokens; do not accept their components
     # as separately evidenced numbers (e.g. 3-3/4 does not support a value of 4).
-    fraction = r'(?<![\w./])(?:(\d+)[- ])?(\d+)/(\d+)(?![\d/])'
+    fraction = r'(?<![\w./])([+-]?)(?:(\d+)[- ])?(\d+)/(\d+)(?![\d/])'
     def take_fraction(match):
-        whole, numerator, denominator = match.groups()
+        sign, whole, numerator, denominator = match.groups()
         if int(denominator):
-            found.add(Decimal(whole or 0) + Decimal(numerator) / Decimal(denominator))
+            value = Decimal(whole or 0) + Decimal(numerator) / Decimal(denominator)
+            found.add(-value if sign == '-' else value)
         return ' ' * len(match.group())
     text = re.sub(fraction, take_fraction, text)
     for token in re.findall(r'(?<![\d.])[+-]?\d[\d,]*(?:\.\d+)?(?![\d.])', text):
