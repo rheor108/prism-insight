@@ -6,6 +6,10 @@ Native CLI tools are disabled except web search for the research replacement.
 """
 from __future__ import annotations
 import asyncio
+try:
+    from asyncio import timeout
+except ImportError:  # Python 3.10
+    from async_timeout import timeout
 from contextlib import AsyncExitStack
 import json
 import logging
@@ -146,7 +150,7 @@ async def _invoke(choice, prompt, *, images=(), web_search=False):
     try:
         # All retries share the original deadline; run_stage also enforces its
         # existing total deadline across tools and nested research calls.
-        async with asyncio.timeout(choice.timeout_seconds):
+        async with timeout(choice.timeout_seconds):
             for attempt in range(1, len(_RETRY_DELAYS) + 2):
                 with tempfile.TemporaryDirectory(prefix='prism-subscription-') as directory:
                     folder = Path(directory)
@@ -201,7 +205,7 @@ async def _invoke(choice, prompt, *, images=(), web_search=False):
     except asyncio.CancelledError:
         outcome = 'cancelled'
         raise
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         outcome = 'timeout'
         log.warning('[CODEX_FAILURE] stage=%s model=%s call=%s attempt=%d code=timeout retry=False',
                     choice.key, choice.model, call_id, attempt)
@@ -234,6 +238,20 @@ def _tool_dict(tool):
 
 async def run_stage(stage, instruction, message, *, provider=None, response_model=None,
                     images=(), web_search=False, variant=None):
+    if stage == 'research' and web_search and response_model is None:
+        if provider is not None or images or variant is not None:
+            raise ValueError('Evidence research does not accept parent tools, images or variants')
+        from prism_core.research_quality import research
+        # Collection and review share the original stage deadline.
+        async with timeout(settings(stage).timeout_seconds):
+            return await research(_run_stage, instruction, message)
+    return await _run_stage(stage, instruction, message, provider=provider,
+                            response_model=response_model, images=images,
+                            web_search=web_search, variant=variant)
+
+
+async def _run_stage(stage, instruction, message, *, provider=None, response_model=None,
+                     images=(), web_search=False, variant=None):
     choice = settings(stage, variant=variant)
     if not choice.enabled:
         raise RuntimeError(f'AI stage is disabled: {stage}')
@@ -266,7 +284,7 @@ async def run_stage(stage, instruction, message, *, provider=None, response_mode
             'Do not use shell, files, MCP, or other non-web tools.\n')
     log.info('[CODEX_STAGE] stage=%s model=%s effort=%s provider=%s',
              stage,choice.model,choice.effort,choice.provider)
-    async with asyncio.timeout(choice.timeout_seconds):
+    async with timeout(choice.timeout_seconds):
         native_web_corrections = 0
         empty_answer_retries = 0
         for _ in range(choice.max_tool_rounds):
