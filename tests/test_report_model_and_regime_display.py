@@ -22,7 +22,7 @@ def test_report_model_defaults_follow_subscription_stage_settings(monkeypatch):
     assert module.REPORT_MODEL == "gpt-5.6-sol"
     assert module.REPORT_EFFORT == "high"
     assert module.REPORT_AUX_MODEL == "gpt-5.6-terra"
-    assert module.REPORT_AUX_EFFORT == "medium"
+    assert module.REPORT_AUX_EFFORT == "low"
     assert module.report_model_slug() == "gpt-5.6-sol"
 
 
