@@ -47,9 +47,16 @@ class ResearchPacket(BaseModel):
     claims: list[Claim] = Field(min_length=1, max_length=16)
 
 
+class ReviewedItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,40}$')
+    action: Literal['accept', 'replace', 'unverified']
+    replacement: Claim | None = None
+
+
 class ResearchReview(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    claims: list[Claim] = Field(min_length=1, max_length=16)
+    claims: list[ReviewedItem] = Field(min_length=1, max_length=16)
 
 
 COLLECT = '''Collect evidence for the user's requested items, not an expansive essay.
@@ -85,7 +92,12 @@ Check numeric values, units, fiscal periods, dates, quoted support, and whether 
 certification is actually confirmed by the company. For earnings check segment tables/PDFs;
 never infer non-disclosure from inability to find a number. Use an alternative official page
 or focused search for missing items, especially NOT_FOUND and NOT_DISCLOSED claims.
-Return exactly the same IDs, one per candidate item, correcting statements and sources.
+Return exactly the same IDs, one verdict per candidate item. To avoid rewriting unchanged
+evidence, return action=accept and replacement=null ONLY after re-opening the sources and
+confirming ALL fields and clauses of the candidate. This confirms the opened flags refer
+to pages you read, not just the collector. If anything needs correction, use action=replace
+and put the complete corrected claim with the SAME ID in replacement. If the item could
+not be checked, use action=unverified and replacement=null. Do not repeat unchanged claims.
 Mark sources opened only if YOU read them. Retain only short supporting excerpts, at most
 25 quoted words per URL in total. SUPPORTED numeric values must appear in their source excerpts
 in the original source unit. For NOT_DISCLOSED require explicit official non-disclosure
@@ -128,7 +140,18 @@ def checked_claims(packet: ResearchPacket, review: ResearchReview) -> list[Claim
     by_id = {c.id: c for c in review.claims}
     result = []
     for original in packet.claims:
-        claim = by_id[original.id].model_copy(update={'requested_item': original.requested_item})
+        verdict = by_id[original.id]
+        if verdict.action == 'replace':
+            if verdict.replacement is None or verdict.replacement.id != original.id:
+                raise ValueError('research replacement item ID does not match')
+            claim = verdict.replacement
+        else:
+            if verdict.replacement is not None:
+                raise ValueError('unexpected research replacement')
+            claim = original
+            if verdict.action == 'unverified':
+                claim = claim.model_copy(update={'status': 'UNVERIFIED', 'sources': []})
+        claim = claim.model_copy(update={'requested_item': original.requested_item})
         sources = [s for s in claim.sources if s.opened
                    and not s.url.username and not s.url.password
                    and (s.published_date is None or s.published_date <= packet.as_of)

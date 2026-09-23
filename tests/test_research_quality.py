@@ -31,8 +31,13 @@ def packet(claims=None, **updates):
     })
 
 
+def reviewed(items):
+    return quality.ResearchReview(claims=[
+        {'id': c['id'], 'action': 'replace', 'replacement': c} for c in items])
+
+
 def checked(item, **window):
-    return quality.checked_claims(packet(**window), quality.ResearchReview(claims=[item]))[0]
+    return quality.checked_claims(packet(**window), reviewed([item]))[0]
 
 
 def test_supported_number_in_korean_excerpt_is_retained():
@@ -89,13 +94,13 @@ def test_forecast_remains_forecast_and_source_excerpt_is_not_republished():
 @pytest.mark.parametrize('claims', [[], [claim(), claim()], [claim(id='different')]])
 def test_review_cannot_drop_duplicate_or_replace_requested_items(claims):
     with pytest.raises((ValidationError, ValueError)):
-        quality.checked_claims(packet(), quality.ResearchReview(claims=claims))
+        quality.checked_claims(packet(), reviewed(claims))
 
 
 @pytest.mark.asyncio
 async def test_complete_pipeline_reviews_missing_information_and_renders_correction(monkeypatch):
     draft = packet([claim(status='NOT_FOUND', statement='not found', sources=[])])
-    review = quality.ResearchReview(claims=[claim()])
+    review = reviewed([claim()])
     runner = AsyncMock(side_effect=[draft.model_dump_json(), review.model_dump_json()])
     result = await quality.research(runner, 'Investigate', {'query': 'DS 매출'})
     assert runner.await_count == 2
@@ -124,7 +129,7 @@ async def test_cancellation_propagates_from_verifier():
 async def test_real_stage_routing_performs_two_sequential_web_calls(monkeypatch):
     invoke = AsyncMock(side_effect=[
         {'answer': packet().model_dump_json(), 'calls': []},
-        {'answer': quality.ResearchReview(claims=[claim()]).model_dump_json(), 'calls': []},
+        {'answer': reviewed([claim()]).model_dump_json(), 'calls': []},
     ])
     monkeypatch.setattr(sub, '_invoke', invoke)
     result = await sub.run_stage('research', 'Original', {'query': 'DS 매출'}, web_search=True)
@@ -193,3 +198,25 @@ def test_dates_and_directions_are_reviewed_without_numeric_metadata():
     result = checked(c)
     assert result.status == 'SUPPORTED'
     assert '원문 수치' not in quality.render(packet(), [result])
+
+
+def test_compact_accept_keeps_evidence_but_still_runs_numeric_checks():
+    review = quality.ResearchReview(claims=[{'id': 'ds_revenue', 'action': 'accept'}])
+    assert quality.checked_claims(packet(), review)[0].status == 'SUPPORTED'
+    assert quality.checked_claims(packet([claim(value=999)]), review)[0].status == 'UNVERIFIED'
+
+
+def test_compact_unverified_suppresses_draft():
+    review = quality.ResearchReview(claims=[{'id': 'ds_revenue', 'action': 'unverified'}])
+    result = quality.render(packet(), quality.checked_claims(packet(), review))
+    assert '127.5' not in result and 'https://' not in result
+
+
+@pytest.mark.parametrize('action,replacement', [
+    ('replace', None), ('replace', claim(id='wrong')), ('accept', claim()),
+])
+def test_malformed_compact_verdict_is_rejected(action, replacement):
+    review = quality.ResearchReview(claims=[{
+        'id': 'ds_revenue', 'action': action, 'replacement': replacement}])
+    with pytest.raises(ValueError):
+        quality.checked_claims(packet(), review)
