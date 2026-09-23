@@ -76,6 +76,11 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest cores/llm/tests/ -q
+          # Entry-quality capture is observation-only and market-isolated.
+          python -m pytest --noconftest \
+            tests/test_entry_quality_capture.py \
+            tests/test_entry_quality_evidence_packet.py \
+            tests/test_trading_context.py -q
           # Lightweight real-order boundary gates. Keep KR/US fill-chaser in
           # separate processes because their runtime packages intentionally
           # shadow one another.
