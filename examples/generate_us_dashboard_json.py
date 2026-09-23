@@ -1450,7 +1450,24 @@ def main():
     parser.add_argument("--no-translation", action="store_true",
                        help="Disable English translation (generate Korean version only)")
 
+    parser.add_argument(
+        "--observability-input", type=Path,
+        help="Also export a local sanitized event spool to the observatory panel",
+    )
     args = parser.parse_args()
+
+    if args.observability_input is not None:
+        # Independent of portfolio/API/translation success. Preserve the last
+        # valid snapshot on failure, and leave remote ClickHouse setups opt-in.
+        try:
+            from tools.export_observability_insights import export_local_snapshot
+            export_local_snapshot(
+                args.observability_input,
+                SCRIPT_DIR / "dashboard" / "public" / "observability_insights.json",
+            )
+            logger.info("Local observability snapshot refreshed")
+        except Exception as error:
+            logger.warning("Local observability refresh skipped: %s", type(error).__name__)
 
     async def async_main():
         try:

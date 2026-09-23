@@ -18,7 +18,7 @@ from report_model_config import REPORT_AUX_EFFORT, REPORT_AUX_MODEL
 from mcp_agent.agents.agent import Agent
 from mcp_agent.app import MCPApp
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
-from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+from cores.llm.subscription_llm import summary_factory
 from mcp_agent.workflows.evaluator_optimizer.evaluator_optimizer import (
     EvaluatorOptimizerLLM,
     QualityRating,
@@ -467,7 +467,7 @@ Evaluate the quality of Telegram summary messages for US stocks based on these c
         evaluator_optimizer = EvaluatorOptimizerLLM(
             optimizer=optimizer,
             evaluator=evaluator,
-            llm_factory=OpenAIAugmentedLLM,
+            llm_factory=summary_factory(optimizer, evaluator),
             min_rating=QualityRating.EXCELLENT
         )
 

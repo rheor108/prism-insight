@@ -26,14 +26,13 @@ from typing import Dict, List, Optional, Any
 # Third-party imports
 import feedparser
 import yt_dlp
-from openai import OpenAI
 from mcp_agent.agents.agent import Agent
 from mcp_agent.app import MCPApp
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
-from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
+from cores.llm.subscription_llm import llm_for
 
 from events.jeoningu_trading_db import JeoninguTradingDB
 from events.jeoningu_price_fetcher import get_current_price
@@ -83,19 +82,6 @@ class JeoninguTrading:
 
     def __init__(self, use_telegram: bool = True):
         """Initialize bot"""
-        # Load OpenAI API key
-        secrets_file = SECRETS_DIR / "mcp_agent.secrets.yaml"
-        if not secrets_file.exists():
-            raise FileNotFoundError("mcp_agent.secrets.yaml not found")
-
-        with open(secrets_file, 'r', encoding='utf-8') as f:
-            secrets = yaml.safe_load(f)
-
-        openai_api_key = secrets.get('openai', {}).get('api_key')
-        if not openai_api_key or openai_api_key == "example key":
-            raise ValueError("OPENAI_API_KEY not configured in mcp_agent.secrets.yaml")
-
-        self.openai_client = OpenAI(api_key=openai_api_key)
         self.db = JeoninguTradingDB()
         self.use_telegram = use_telegram
 
@@ -231,7 +217,7 @@ Output only one of: "Own Opinion" or "Interview"
                 app = MCPApp(name="title_filter")
 
                 async with app.run() as _:
-                    llm = await agent.attach_llm(OpenAIAugmentedLLM)
+                    llm = await agent.attach_llm(llm_for('video', variant='filter'))
                     result = await llm.generate_str(
                         message="Analyze the above title and output only 'Own Opinion' or 'Interview'.",
                         request_params=RequestParams(
@@ -323,107 +309,12 @@ Output only one of: "Own Opinion" or "Interview"
             return None
 
     def transcribe_audio(self, audio_file: str) -> Optional[str]:
-        """Transcribe audio with Whisper"""
-        logger.info(f"Transcribing: {audio_file}")
-
-        try:
-            file_size = Path(audio_file).stat().st_size
-            file_size_mb = file_size / 1024 / 1024
-            max_size = 20 * 1024 * 1024  # 20MB (conservative limit)
-
-            logger.info(f"File size: {file_size_mb:.2f}MB")
-            
-            # Try to get audio duration
-            try:
-                from pydub import AudioSegment
-                audio = AudioSegment.from_mp3(audio_file)
-                duration_sec = len(audio) / 1000
-                logger.info(f"Audio duration: {duration_sec / 60:.1f} minutes ({duration_sec:.0f}s)")
-            except Exception:
-                logger.debug("Could not determine audio duration")
-
-            if file_size <= max_size:
-                logger.info("Sending file to OpenAI Whisper API... (this may take several minutes for long audio)")
-                import time
-                start_time = time.time()
-                
-                with open(audio_file, "rb") as f:
-                    result = self.openai_client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=f,
-                        language="ko",
-                        timeout=600.0  # 10 minute timeout for long audio
-                    )
-                
-                elapsed = time.time() - start_time
-                logger.info(f"Transcription completed in {elapsed:.1f}s ({len(result.text)} chars)")
-                return result.text
-            else:
-                # Split large files
-                logger.info(f"File size {file_size_mb:.2f}MB exceeds 20MB limit, splitting...")
-                return self._transcribe_large_file(audio_file)
-
-        except Exception as e:
-            logger.error(f"Transcription error: {e}", exc_info=True)
-            return None
+        """Paid transcription is disabled; supply or reuse a transcript."""
+        return None
 
     def _transcribe_large_file(self, audio_file: str) -> Optional[str]:
-        """Split and transcribe large audio files"""
-        try:
-            from pydub import AudioSegment
-
-            audio = AudioSegment.from_mp3(audio_file)
-            chunk_length_ms = 5 * 60 * 1000  # 5 minutes (safe size considering 20MB limit)
-            chunks = []
-            transcripts = []
-
-            total_duration_sec = len(audio) / 1000
-            num_chunks = (len(audio) + chunk_length_ms - 1) // chunk_length_ms
-            logger.info(f"Audio duration: {total_duration_sec:.1f}s, splitting into {num_chunks} chunks")
-
-            for i in range(0, len(audio), chunk_length_ms):
-                chunk = audio[i:i + chunk_length_ms]
-                chunk_file = AUDIO_TEMP_DIR / f"temp_audio_chunk_{i//chunk_length_ms}.mp3"
-                chunk.export(chunk_file, format="mp3")
-
-                # Verify chunk size doesn't exceed 20MB
-                chunk_size = chunk_file.stat().st_size
-                if chunk_size > 20 * 1024 * 1024:
-                    logger.warning(f"Chunk {i//chunk_length_ms} size {chunk_size / 1024 / 1024:.2f}MB exceeds 20MB!")
-                    # Continue anyway, but log the warning
-                
-                chunks.append(chunk_file)
-
-            for idx, chunk_file in enumerate(chunks, 1):
-                logger.info(f"Transcribing chunk {idx}/{len(chunks)}")
-                try:
-                    with open(chunk_file, "rb") as f:
-                        result = self.openai_client.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=f,
-                            language="ko"
-                        )
-                    transcripts.append(result.text)
-                except Exception as e:
-                    logger.error(f"Chunk {idx} error: {e}")
-                    transcripts.append(f"[Chunk {idx} failed]")
-
-            # Cleanup
-            for chunk_file in chunks:
-                try:
-                    chunk_file.unlink()
-                except Exception:
-                    pass
-
-            logger.info(f"Large file transcription completed: {len(transcripts)} chunks processed")
-            return " ".join(transcripts)
-
-        except ImportError:
-            logger.error("pydub not installed. Install: pip install pydub")
-            return None
-        except Exception as e:
-            logger.error(f"Large file transcription error: {e}")
-            return None
+        """Paid transcription is disabled; supply or reuse a transcript."""
+        return None
 
     def create_analysis_agent(self, video_info: Dict, transcript: str) -> Agent:
         """
@@ -520,7 +411,7 @@ Output must follow the JSON schema below (pure JSON only, no markdown code block
             app = MCPApp(name="jeoningu_analysis")
 
             async with app.run() as _:
-                llm = await agent.attach_llm(OpenAIAugmentedLLM)
+                llm = await agent.attach_llm(llm_for('video'))
                 result = await llm.generate_str(
                     message="Analyze the video according to the instructions above and output the contrarian investment strategy in JSON format.",
                     request_params=RequestParams(
@@ -1011,24 +902,15 @@ click the <b>'Lab'</b> tab!
         logger.info(f"Processing: {video_info['title']}")
 
         try:
-            # Extract audio
-            audio_file = self.extract_audio(video_info['link'])
-            if not audio_file:
-                return None
-
-            # Transcribe
-            transcript = self.transcribe_audio(audio_file)
-            if not transcript:
-                return None
-
-            # Save transcript to transcripts directory
+            # Use an explicitly supplied or cached transcript. Codex is not an
+            # audio transcription endpoint; do not download audio we cannot use.
+            transcript = video_info.get('transcript')
             transcript_file = TRANSCRIPTS_DIR / f"transcript_{video_info['id']}.txt"
-            with open(transcript_file, 'w', encoding='utf-8') as f:
-                f.write(f"Video: {video_info['title']}\n")
-                f.write(f"URL: {video_info['link']}\n")
-                f.write(f"Date: {video_info['published']}\n\n")
-                f.write(transcript)
-            logger.info(f"Transcript saved: {transcript_file.name}")
+            if not transcript and transcript_file.is_file():
+                transcript = transcript_file.read_text(encoding='utf-8')
+            if not transcript or not transcript.strip():
+                logger.info("Video analysis skipped: supplied/cached transcript required")
+                return None
 
             # Analyze
             analysis = await self.analyze_video(video_info, transcript)

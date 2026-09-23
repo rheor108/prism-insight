@@ -190,11 +190,11 @@ class KRDataEnricher:
         self._trading = None
 
     def _get_trading(self):
-        """Lazy-init DomesticStockTrading in demo mode."""
+        """Use the configured account mode for quotes, with order execution disabled."""
         if self._trading is None:
             try:
                 from trading.domestic_stock_trading import DomesticStockTrading  # type: ignore[import]
-                self._trading = DomesticStockTrading(mode="demo")
+                self._trading = DomesticStockTrading(auto_trading=False)
             except Exception as e:
                 logger.warning(f"KIS trading init failed (enrichment unavailable): {e}")
         return self._trading

@@ -366,7 +366,8 @@ class StockAnalysisOrchestrator:
 
             # Step 2: Run LLM agent with perplexity for qualitative analysis
             from mcp_agent.app import MCPApp
-            from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+            from cores.llm.subscription_llm import llm_for
+            OpenAIAugmentedLLM = llm_for('macro')
             from cores.agents.macro_intelligence_agent import create_macro_intelligence_agent
 
             macro_app = MCPApp(name="macro_intelligence")
@@ -530,14 +531,26 @@ class StockAnalysisOrchestrator:
                                 name_col = "Company Name"
                             elif "종목명" in stocks_df.columns:
                                 name_col = "종목명"
+                            elif "stock_name" in stocks_df.columns:
+                                name_col = "stock_name"
+                            elif "name" in stocks_df.columns:
+                                name_col = "name"
+                            elif "Name" in stocks_df.columns:
+                                name_col = "Name"
 
                             if name_col:
                                 name = stocks_df.loc[ticker, name_col]
-                            # Fallback: use pykrx API if name is empty
+                            if not name:
+                                for candidates in self.selected_tickers.get(mode, {}).values():
+                                    if isinstance(candidates, list):
+                                        for candidate in candidates:
+                                            if isinstance(candidate, dict) and str(candidate.get('code')) == str(ticker):
+                                                name = candidate.get('name') or ''
+                            # Fallback: use the configured market-data sources if name is empty
                             if not name:
                                 try:
-                                    from pykrx import stock as stock_api
-                                    name = stock_api.get_market_ticker_name(ticker) or ""
+                                    from cores.market_data import get_market_ticker_name
+                                    name = get_market_ticker_name(ticker) or ""
                                 except Exception:
                                     pass
 
@@ -1436,6 +1449,16 @@ class StockAnalysisOrchestrator:
                 ticker = ticker_info
                 company_name = f"Stock_{ticker}"
 
+            if not isinstance(company_name, str) or company_name.startswith("Stock_"):
+                try:
+                    from cores.market_data import get_market_ticker_name
+                    company_name = await asyncio.to_thread(get_market_ticker_name, ticker)
+                except Exception:
+                    company_name = ""
+                if not company_name or str(company_name).startswith("Stock_"):
+                    logger.error("REPORT_IDENTITY_UNAVAILABLE: ticker=%s", ticker)
+                    return None
+
             logger.info(f"[{idx}/{len(tickers)}] Starting stock analysis: {company_name}({ticker})")
 
             # Set output file path
@@ -1578,17 +1601,7 @@ async def main():
 
     # ChatGPT OAuth proxy setup
     proxy_started = False
-    if not args.no_proxy and os.getenv("PRISM_OPENAI_AUTH_MODE") == "chatgpt_oauth":
-        try:
-            from cores.chatgpt_proxy import inject_env, start_proxy, stop_proxy
-            inject_env()
-            proxy_started = await start_proxy()
-            if not proxy_started:
-                logger.warning("ChatGPT OAuth proxy failed to start, falling back to standard API")
-                from cores.chatgpt_proxy import clear_env
-                clear_env()
-        except Exception as e:
-            logger.warning("ChatGPT OAuth proxy setup error: %s, falling back to standard API", e)
+    logger.info("AI provider: Codex subscription; no API fallback")
 
     orchestrator = StockAnalysisOrchestrator(telegram_config=telegram_config)
 

@@ -1,0 +1,4 @@
+# Isolated scraper runtime: install into .venv-crawl4ai, not the trading venv.
+crawl4ai==0.9.0
+mcp==1.30.0
+playwright==1.63.0

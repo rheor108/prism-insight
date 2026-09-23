@@ -19,12 +19,12 @@ mcp:
       read_timeout_seconds: 120
 
     firecrawl:
-        command: "npx"
-        # Pin the production-verified release so tool schemas cannot drift.
-        args: [ "-y", "firecrawl-mcp@3.23.6" ]
-        env:
-          FIRECRAWL_API_KEY: "example key"
-
+      # Compatibility tool name; implementation is local Crawl4AI, with no API key.
+      command: ${PRISM_MCP_PYTHON:-python3}
+      args: [-m, prism_core.scraper_bootstrap]
+      env:
+        PYTHONPATH: ${PRISM_REPO_ROOT:-.}
+      read_timeout_seconds: 90
     kospi_kosdaq:
       command: "python3"
       args:

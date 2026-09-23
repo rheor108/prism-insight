@@ -128,7 +128,8 @@ async def translate_telegram_message(
     Returns:
         str: Translated message
     """
-    from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+    from cores.llm.subscription_llm import llm_for
+    OpenAIAugmentedLLM = llm_for('translation')
     from mcp_agent.workflows.llm.augmented_llm import RequestParams
 
     try:

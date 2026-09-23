@@ -78,6 +78,7 @@ function metricDelta(
 export function ObservabilityInsightsPanel({ data, market }: Props) {
   const { language } = useLanguage()
   const current = data.markets[market]
+  const isLocal = data.source?.kind === "local_jsonl"
   const latestEvent = data.generated_at ? new Date(data.generated_at) : null
   const staleMinutes = latestEvent
     ? Math.max(0, (Date.now() - latestEvent.getTime()) / 60_000)
@@ -97,9 +98,13 @@ export function ObservabilityInsightsPanel({ data, market }: Props) {
               {language === "ko" ? "PRISM 관측 센터" : "PRISM Observatory"}
             </h3>
             <p className="text-xs text-muted-foreground">
-              {language === "ko"
-                ? "ClickHouse 원본 이벤트를 정제한 매매 성과와 배포 영향"
-                : "Curated trading performance and deployment impact from ClickHouse events"}
+              {isLocal
+                ? language === "ko"
+                  ? "로컬 수집 기록을 정제한 매매 성과와 진입품질 요약"
+                  : "Trading performance and entry-quality summaries from local events"
+                : language === "ko"
+                  ? "ClickHouse 원본 이벤트를 정제한 매매 성과와 배포 영향"
+                  : "Curated trading performance and deployment impact from ClickHouse events"}
             </p>
           </div>
         </div>
@@ -107,19 +112,35 @@ export function ObservabilityInsightsPanel({ data, market }: Props) {
           <Badge
             variant="outline"
             className={cn(
-              staleMinutes <= 30
+              isLocal || staleMinutes <= 30
                 ? "border-emerald-500/30 text-emerald-600"
                 : "border-red-500/30 text-red-600",
             )}
           >
             <Activity className="mr-1 h-3 w-3" />
-            {staleMinutes <= 30
-              ? language === "ko" ? "수집 정상" : "Fresh"
-              : language === "ko" ? "갱신 지연" : "Stale"}
+            {isLocal
+              ? language === "ko" ? "로컬 스냅샷" : "Local snapshot"
+              : staleMinutes <= 30
+                ? language === "ko" ? "수집 정상" : "Fresh"
+                : language === "ko" ? "갱신 지연" : "Stale"}
           </Badge>
           <Badge variant="secondary">{market}</Badge>
         </div>
       </div>
+
+      {isLocal && (
+        <p className="text-xs text-muted-foreground">
+          {language === "ko" ? "마지막 내보내기: " : "Last exported: "}
+          {latestEvent?.toLocaleString(language === "ko" ? "ko-KR" : "en-US") || "—"}
+          {((data.source?.invalid_lines || 0) + (data.source?.incomplete_tail_lines || 0)) > 0 && (
+            <span className="ml-2">
+              {language === "ko"
+                ? "일부 불완전한 기록은 집계에서 제외되었습니다."
+                : "Some incomplete records were excluded."}
+            </span>
+          )}
+        </p>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <Card>
@@ -173,6 +194,17 @@ export function ObservabilityInsightsPanel({ data, market }: Props) {
               <span>{language === "ko" ? "진입품질 수집률" : "Entry-quality capture"}</span>
               <strong>{pct(entryQualityCapture?.coverage_rate ?? null, 0)}</strong>
             </div>
+            <div className="flex justify-between text-xs">
+              <span>{language === "ko" ? "품질 수집/대상 후보" : "Captured/eligible candidates"}</span>
+              <strong>{entryQualityCapture?.captured_count || 0}/{entryQualityCapture?.candidate_count || 0}</strong>
+            </div>
+            {!entryQualityCapture?.coverage_start_at && (
+              <p className="text-xs text-muted-foreground">
+                {language === "ko"
+                  ? "진입품질 항목이 포함된 새 후보 기록을 기다리고 있습니다."
+                  : "Awaiting new candidates with entry-quality context."}
+              </p>
+            )}
             <div className="flex justify-between">
               <span>{language === "ko" ? "매매일지 영향 수집률" : "Journal influence capture"}</span>
               <strong>{pct(journalCapture?.coverage_rate ?? null, 0)}</strong>

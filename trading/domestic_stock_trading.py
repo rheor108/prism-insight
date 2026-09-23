@@ -1369,6 +1369,11 @@ class DomesticStockTrading:
                         if buy_result['success']:
                             result['success'] = True
                             result['order_no'] = buy_result['order_no']
+                            # Preserve the identifier namespace for next-batch
+                            # reservation -> regular-order reconciliation.
+                            if buy_result.get('period_type'):
+                                result['is_reserved_order'] = True
+                                result['period_type'] = buy_result['period_type']
                             result['message'] = f"Buy completed: {buy_quantity} shares x {current_price_info['current_price']:,} KRW = {result['total_amount']:,} KRW"
                             logger.info(f"[Async Buy API] {stock_code} buy successful")
                         else:
@@ -1606,6 +1611,17 @@ class DomesticStockTrading:
                 f"{res.getErrorCode()} - {res.getErrorMessage()}"
             )
         return res
+
+    def get_entry_cost_snapshot(self, start: str, end: str) -> dict:
+        """Read-only account-scoped balance and buy-fill inquiry for batch correction."""
+        from prism_core.entry_cost_inquiry import read_entry_cost_snapshot
+        with ka.get_trading_env_lock():
+            self._activate_account()
+            return read_entry_cost_snapshot(
+                ka._url_fetch, market="KR", account_key=self.account_key,
+                account_no=self.trenv.my_acct, product=self.trenv.my_prod,
+                mode=self.mode, start=start, end=end,
+            )
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
         """

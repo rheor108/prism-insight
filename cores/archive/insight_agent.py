@@ -3,18 +3,13 @@ insight_agent.py — /insight 명령을 처리하는 메인 에이전트.
 
 흐름:
   1. retrieval: persistent_insights (FTS + embedding) + weekly_summary + report_archive
-  2. synthesis: mcp-agent Agent + AnthropicAugmentedLLM (기본 claude-sonnet-5,
-                INSIGHT_MODEL 로 교체 가능)
-                function calling으로 필요시 MCP 도구 자동 선택
-                (perplexity / firecrawl / yahoo_finance / kospi_kosdaq)
-
-                OpenAI gpt-5.x reasoning 모델은 function calling과 reasoning_effort를
-                동시에 지원하지 않아 (400 invalid_request_error) Claude로 전환.
-                OpenAI는 embedding / 비-tool synthesize 전용.
+  2. synthesis: Codex 구독의 archive_query 단계 + 읽기 전용 MCP 조회.
+                모델과 추론 수준은 config/ai_models.json에서 지정.
   3. storage:   persistent_insights INSERT (fire-and-forget 성격이지만 동기로 기다림)
 """
 
 from __future__ import annotations
+from prism_core.ai_models import settings
 
 import asyncio
 import json
@@ -27,7 +22,6 @@ from typing import Any, Dict, List, Optional
 
 from mcp_agent.agents.agent import Agent
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
-from mcp_agent.workflows.llm.augmented_llm_anthropic import AnthropicAugmentedLLM
 from pydantic import BaseModel, Field
 
 from . import persistent_insights as pi_store
@@ -45,10 +39,8 @@ _KST = timezone(timedelta(hours=9))
 
 logger = logging.getLogger(__name__)
 
-# Claude handles MCP function calling reliably in this repo (firecrawl pattern).
-# Overridable so model swaps don't need a code change — the report path already
-# works this way via REPORT_MODEL.
-DEFAULT_MODEL = os.getenv("INSIGHT_MODEL", "claude-sonnet-5")
+# Configured archive stage is authoritative.
+DEFAULT_MODEL = settings('archive_query').model
 _MAX_REPORTS_IN_CONTEXT = 6
 
 # 도구 루프 상한. mcp-agent 기본값은 10인데, 그 값을 다 쓰면 마지막 턴에
@@ -247,7 +239,7 @@ class InsightAgent:
         model: str = DEFAULT_MODEL,
         db_path: Optional[str] = None,
     ):
-        self.model = model
+        self.model = settings('archive_query').model
         self.db_path = db_path or str(ARCHIVE_DB_PATH)
         self._api_key: Optional[str] = None
 
@@ -523,18 +515,8 @@ class InsightAgent:
     ) -> Optional[Dict[str, Any]]:
         """JSON 파싱이 실패했을 때의 복구 패스.
 
-        `generate_structured` 는 Anthropic 의 강제 tool_call 로 스키마를 받아내는
-        한 턴 호출이라 형식이 보장된다. 도구를 주지 않으므로 추가 유료 호출도 없다.
-
-        **`use_history=False` 가 핵심이다.** 파싱이 깨지는 상황은 대개 도구 루프가
-        중간에 끊긴 경우인데, 그때 이력의 마지막이 `tool_result` 없는 `tool_use` 로
-        남는다. 그 이력을 재생하면 Anthropic 이 400 으로 거절한다:
-
-            messages.4: `tool_use` ids were found without `tool_result` blocks
-            immediately after
-
-        그래서 이력을 버리고 질문·컨텍스트·조사 메모를 직접 실어 자립적인 한 턴으로
-        만든다. 메모에서 도구 추적 줄은 걷어낸다 — 모델에게 다시 먹일 내용이 아니다.
+        질문·컨텍스트·조사 메모를 전달해 Codex에서 다시 생성하고 Pydantic으로
+        검증한다. tool_filter로 조회 도구를 제거하므로 이 복구에서는 추가 조회가 없다.
         """
         clean_draft = "\n".join(
             ln for ln in (draft or "").splitlines()
@@ -665,7 +647,8 @@ class InsightAgent:
             )
             try:
                 async with agent:
-                    llm = await agent.attach_llm(AnthropicAugmentedLLM)
+                    from cores.llm.subscription_llm import llm_for
+                    llm = await agent.attach_llm(llm_for('archive_query'))
                     user_msg = (
                         f"## 사용자 질문\n{question}\n\n"
                         f"## 컨텍스트 (누적 인사이트 + 리포트)\n{context_str}\n\n"

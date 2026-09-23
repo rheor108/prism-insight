@@ -17,10 +17,6 @@ from zoneinfo import ZoneInfo
 import markdown
 
 from cores.agents.report_agent import ReportAgent as Agent
-from cores.llm.agent_bridge import ensure_openai_agents_configured
-from cores.llm.backends.openai_agents_backend import OpenAIAgentsBackend
-from cores.llm.config_loader import load_report_mcp_registry
-from cores.llm.ports import AgentSpec, LLMParams
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -45,7 +41,6 @@ EVALUATION_FALLBACK_TIMEOUT_SECONDS = _positive_number_env(
     "EVALUATION_FALLBACK_TIMEOUT_SECONDS", 40.0
 )
 
-_telegram_backend = None
 
 TELEGRAM_OPINION_STYLE_GUIDE = """
 ## 프리즘 텔레그램 의견 작성 규칙
@@ -139,64 +134,23 @@ def get_recent_evaluation_report(
     return True, content, latest
 
 
-def _get_telegram_backend():
-    """Lazily configure the shared SDK backend for Telegram analysis calls."""
-    global _telegram_backend
-    if _telegram_backend is None:
-        ensure_openai_agents_configured()
-        _telegram_backend = OpenAIAgentsBackend(load_report_mcp_registry())
-    return _telegram_backend
 
 
-async def _generate_telegram_text(
-    *,
-    agent: Agent,
-    message: str,
-    max_tokens: int,
-    timeout_seconds: float | None = None,
-) -> str:
-    """Run one Telegram analysis request without an mcp-agent runtime."""
-    spec = AgentSpec(
-        name=agent.name,
-        instructions=agent.instruction,
-        model=TELEGRAM_ANALYSIS_MODEL,
-        mcp_servers=tuple(agent.server_names),
-        params=LLMParams(
-            max_tokens=max_tokens,
-            reasoning_effort=TELEGRAM_ANALYSIS_EFFORT,
-            parallel_tool_calls=True,
-            max_iterations=10,
-        ),
-    )
-    started = time.monotonic()
-    logger.info(
-        "[TELEGRAM_LLM] agent=%s phase=start model=%s effort=%s timeout_seconds=%s",
-        agent.name,
-        TELEGRAM_ANALYSIS_MODEL,
-        TELEGRAM_ANALYSIS_EFFORT,
-        timeout_seconds,
-    )
-    try:
-        operation = _get_telegram_backend().run(spec, message)
-        result = (
-            await asyncio.wait_for(operation, timeout=timeout_seconds)
-            if timeout_seconds and timeout_seconds > 0
-            else await operation
-        )
-    except BaseException as error:
-        logger.warning(
-            "[TELEGRAM_LLM] agent=%s phase=failed duration_seconds=%.3f error=%s",
-            agent.name,
-            time.monotonic() - started,
-            type(error).__name__,
-        )
-        raise
-    logger.info(
-        "[TELEGRAM_LLM] agent=%s phase=complete duration_seconds=%.3f",
-        agent.name,
-        time.monotonic() - started,
-    )
-    return result.text
+async def _generate_telegram_text(*, agent, message, max_tokens, timeout_seconds=None):
+    from prism_core.codex_subscription import run_with_registry
+    stages = {
+        'evaluation_agent':'consultation', 'us_evaluation_agent':'consultation',
+        'evaluation_fallback_agent':'consultation',
+        'followup_agent':'followup', 'us_followup_agent':'followup',
+        'journal_conversation_agent':'journal_chat',
+        'firecrawl_search_analyst':'search_analysis', 'firecrawl_followup_agent':'search_analysis',
+    }
+    stage = stages[agent.name]
+    operation = run_with_registry(stage, agent.instruction, message, agent.server_names)
+    if timeout_seconds and timeout_seconds > 0:
+        return await asyncio.wait_for(operation, timeout=timeout_seconds)
+    return await operation
+
 
 # Constant definitions
 REPORTS_DIR = Path("reports")

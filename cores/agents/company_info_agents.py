@@ -178,8 +178,16 @@ def create_company_status_agent(company_name, company_code, reference_date, urls
 
     return Agent(
         name="company_status_agent",
-        instruction=instruction,
-        server_names=["firecrawl"]
+        instruction=instruction + """
+Source failure policy (overrides instructions implying all data was collected):
+If WiseReport is inaccessible or requires authentication, use the research tool to
+find the same company and ticker in issuer investor-relations disclosures or DART.
+Cite source URL, publication date and accounting period. Never mix periods or
+substitute another company. Clearly mark individual unavailable metrics.
+If no substantive evidence for this section can be verified from any source,
+return REPORT_DATA_UNAVAILABLE and a brief reason, rather than a completed report.
+""",
+        server_names=["firecrawl", "perplexity"]
     )
 
 
@@ -348,6 +356,14 @@ def create_company_overview_agent(company_name, company_code, reference_date, ur
 
     return Agent(
         name="company_overview_agent",
-        instruction=instruction,
-        server_names=["firecrawl"]
+        instruction=instruction + """
+Source failure policy (overrides instructions implying all data was collected):
+If WiseReport is inaccessible or requires authentication, use the research tool to
+find the same company and ticker in issuer investor-relations disclosures or DART.
+Cite source URL, publication date and accounting period. Never mix periods or
+substitute another company. Clearly mark individual unavailable metrics.
+If no substantive evidence for this section can be verified from any source,
+return REPORT_DATA_UNAVAILABLE and a brief reason, rather than a completed report.
+""",
+        server_names=["firecrawl", "perplexity"]
     )

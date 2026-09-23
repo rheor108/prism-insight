@@ -38,6 +38,7 @@ from typing import List, Dict, Any, Tuple, Optional
 # Add parent directory to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from prism_core.entry_costs import reconcile_agent_entry_costs, confirmed_cost
 from prism_core.execution_service import (  # noqa: E402
     ExecutionService,
     OrderOutcomeUnknown,
@@ -116,7 +117,8 @@ _spec = _ilu.spec_from_file_location(
 assert _spec is not None and _spec.loader is not None
 _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-OpenAIAugmentedLLM = _mod.OpenAIResponsesLLM
+from cores.llm.subscription_llm import llm_for
+OpenAIAugmentedLLM = llm_for('us_buy')
 _codex_spec = _ilu.spec_from_file_location(
     "codex_oauth_fast_backend",
     Path(__file__).resolve().parent.parent / "cores" / "llm" / "codex_oauth_fast_backend.py",
@@ -1389,9 +1391,7 @@ class USStockTrackingAgent:
 
             ticker_tag = ticker or "?"
             scenario_json = None
-            codex_enabled = os.environ.get(
-                "PRISM_US_CODEX_FAST_TRADING", "0"
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_enabled = False  # Replaced by stage-based subscription backend
             if codex_enabled:
                 try:
                     instruction = str(
@@ -1802,7 +1802,7 @@ class USStockTrackingAgent:
                           f"Sector: {scenario.get('sector', 'Unknown')}\n"
             else:
                 message = f"📈 New Buy: {company_name}({ticker})\n" \
-                          f"Buy Price: ${current_price:,.2f}\n" \
+                          f"Analysis Price: ${current_price:,.2f} (fill cost checked next batch)\n" \
                           f"Target: ${target_price:,.2f}\n" \
                           f"Stop Loss: ${stop_loss:,.2f}\n" \
                           f"Period: {scenario.get('investment_period', 'short')}\n" \
@@ -2326,10 +2326,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
 """
 
             response = None
-            codex_sell_enabled = os.environ.get(
-                "PRISM_US_CODEX_FAST_SELL",
-                os.environ.get("PRISM_US_CODEX_FAST_TRADING", "0"),
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_sell_enabled = False  # Replaced by stage-based subscription backend
             if codex_sell_enabled:
                 try:
                     instruction = str(
@@ -2375,7 +2372,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             if response is None:
                 async def _legacy_sell_response():
                     llm = await self.sell_decision_agent.attach_llm(
-                        OpenAIAugmentedLLM
+                        llm_for('us_sell')
                     )
                     return await llm.generate_str(
                         message=prompt_message,
@@ -3095,6 +3092,12 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                 return False
             # ─────────────────────────────────────────────────────────────────
 
+            # Batch reconciliation may have corrected the cost since this caller
+            # loaded its snapshot. History and journal use the locked live row.
+            from prism_core.entry_costs import refresh_sale_cost
+            buy_price = refresh_sale_cost(self.conn, "US", account_key,
+                                          legacy_holding_ids, stock_data)
+
             # Calculate profit rate
             profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
 
@@ -3235,6 +3238,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
         """
         try:
             logger.info("Starting US holdings update")
+            await reconcile_agent_entry_costs(self, "US")
 
             # 매도 판단에 쓸 '현재' 시장 레짐을 사이클당 1회 계산(OpenAI 무관).
             # _fallback_sell_decision 이 self._live_regime_cache 로 참조한다.
@@ -3244,9 +3248,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             # id included for pyramiding (#288): enables per-row delete and
             # fractional-sell quantity computation for multi-row tickers.
             self.cursor.execute(
-                """SELECT id, ticker, company_name, buy_price, buy_date, current_price,
-                   scenario, target_price, stop_loss, last_updated,
-                   trigger_type, trigger_mode, sector, account_key, account_name
+                """SELECT *
                    FROM us_stock_holdings
                    WHERE account_key = ?""",
                 (self._account_scope()[0],)
@@ -3271,6 +3273,10 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             fully_exited_tickers: set = set()
 
             for stock in holdings:
+                if (not confirmed_cost(stock) or stock.get('ticker') in
+                        getattr(self, '_entry_cost_unresolved', set())):
+                    logger.warning('[ENTRY_COST] decision deferred for %s: fill cost unconfirmed', stock.get('ticker'))
+                    continue
                 ticker = stock.get('ticker')
                 company_name = stock.get('company_name')
 
@@ -3573,8 +3579,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
         try:
             # Query holdings
             self.cursor.execute(
-                """SELECT ticker, company_name, buy_price, current_price, buy_date,
-                   scenario, target_price, stop_loss, sector
+                """SELECT *
                    FROM us_stock_holdings
                    WHERE account_key = ?""",
                 (self._account_scope()[0],)
@@ -3605,7 +3610,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                 for h in holdings:
                     buy_price = h.get('buy_price', 0)
                     current_price = h.get('current_price', 0)
-                    if buy_price > 0:
+                    if buy_price > 0 and confirmed_cost(h):
                         profit_rate = ((current_price - buy_price) / buy_price) * 100
                         profit_rates.append((h.get('ticker'), h.get('company_name'), profit_rate))
 
@@ -3624,6 +3629,9 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
             if holdings and len(holdings) > 0:
                 message += "🔸 Holdings List:\n"
                 for stock in holdings:
+                    if not confirmed_cost(stock):
+                        message += f"- {stock.get('company_name')}({stock.get('ticker')}): 체결 원가 확인 대기 — 수익률 미산출\n"
+                        continue
                     ticker = stock.get('ticker', '')
                     company_name = stock.get('company_name', '')
                     buy_price = stock.get('buy_price', 0)
@@ -4111,6 +4119,7 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
 
                     if entry_eligible:
                         # is_add => pyramiding additional independent row (#288)
+                        entry_message_start = len(self.message_queue)
                         buy_result = await self._buy_stock_with_position(
                             ticker,
                             company_name,
@@ -4161,6 +4170,10 @@ Use yahoo_finance and sqlite tools to check latest data, then decide whether to 
                                             account_key=account_key,
                                             intent_id=persisted_intent_id,
                                         )
+                                    from prism_core.failed_entries import compensate_agent_rejection
+                                    if compensate_agent_rejection(self, "US", buy_result.legacy_holding_id, trade_result, entry_message_start):
+                                        logger.warning("ENTRY_REJECTED_COMPENSATED: market=US ticker=%s", ticker)
+                                        continue
                                     emit_fill_reconciliation(
                                         market="US",
                                         ticker=ticker,

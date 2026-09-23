@@ -19,6 +19,12 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def forbid_unmocked_subscription(monkeypatch):
+    monkeypatch.setattr("prism_core.codex_subscription._invoke",
+                        AsyncMock(side_effect=AssertionError("Live inference forbidden in unit tests")))
+
+
 class SimpleSchema(BaseModel):
     label: str
     confidence: int
@@ -108,17 +114,22 @@ class TestCapabilities:
     def test_vision_model_default(self, monkeypatch):
         monkeypatch.delenv("PRISM_VISION_MODEL", raising=False)
         from cores.llm import capabilities
-        assert capabilities.vision_model() == "gpt-5.4-mini"
+        assert capabilities.vision_model() == "gpt-5.6-sol"
 
-    def test_vision_model_override(self, monkeypatch):
-        monkeypatch.setenv("PRISM_VISION_MODEL", "gpt-4o-mini")
+    def test_vision_model_override(self, monkeypatch, tmp_path):
+        from prism_core.ai_models import CONFIG
+        data = json.loads(CONFIG.read_text())
+        data['stages']['vision']['model'] = 'gpt-5.6-terra'
+        config = tmp_path / 'models.json'
+        config.write_text(json.dumps(data))
+        monkeypatch.setenv('PRISM_AI_CONFIG', str(config))
         from cores.llm import capabilities
-        assert capabilities.vision_model() == "gpt-4o-mini"
+        assert capabilities.vision_model() == "gpt-5.6-terra"
 
-    def test_vision_auth_default_api(self, monkeypatch):
+    def test_vision_auth_subscription(self, monkeypatch):
         monkeypatch.delenv("PRISM_VISION_AUTH", raising=False)
         from cores.llm import capabilities
-        assert capabilities.vision_auth() == "api"
+        assert capabilities.vision_auth() == "codex_subscription"
 
     def test_vision_available_false_when_off(self, monkeypatch):
         monkeypatch.delenv("PRISM_FEATURE_VISION", raising=False)
@@ -126,12 +137,12 @@ class TestCapabilities:
         from cores.llm import capabilities
         assert capabilities.vision_available() is False
 
-    def test_vision_available_false_when_no_key(self, monkeypatch):
+    def test_vision_available_true_without_api_key(self, monkeypatch):
         monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         from cores.llm import capabilities
         monkeypatch.setattr(capabilities, "_secrets_api_key", lambda: "")
-        assert capabilities.vision_available() is False
+        assert capabilities.vision_available() is True
 
     def test_vision_available_true_when_on_and_key(self, monkeypatch):
         monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
@@ -209,244 +220,70 @@ class TestAnalyzeImageOff:
 
 
 # ---------------------------------------------------------------------------
-# analyze_image — ON + no key: returns None
+# analyze_image — subscription authentication without API keys
 # ---------------------------------------------------------------------------
 
 
-class TestAnalyzeImageOnNoKey:
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_api_key(self, monkeypatch, tmp_path):
+class TestSubscriptionVision:
+    @pytest.fixture(autouse=True)
+    def subscription_only(self, monkeypatch):
         monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        from cores.llm import capabilities
-        monkeypatch.setattr(capabilities, "_secrets_api_key", lambda: "")
-
-        img = tmp_path / "chart.png"
-        img.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        with patch("openai.AsyncOpenAI") as mock_client_cls:
-            from cores.llm.features.vision import analyze_image
-            result = await analyze_image(str(img), "describe this chart")
-
-        assert result is None
-        mock_client_cls.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# analyze_image — ON + key present: happy path
-# ---------------------------------------------------------------------------
-
-
-class TestAnalyzeImageHappyPath:
-    @pytest.mark.asyncio
-    async def test_calls_responses_create_once_and_returns_text(
-        self, monkeypatch, tmp_path
-    ):
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
-        img = tmp_path / "chart.png"
-        img.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        mock_response = _make_mock_response("bullish cup-and-handle detected")
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            from cores.llm.features import vision as vision_module
-            # Force reimport of openai inside function via patch
-            with patch.dict("sys.modules", {}):
-                result = await vision_module.analyze_image(
-                    str(img), "describe the chart pattern"
-                )
-
-        assert result == "bullish cup-and-handle detected"
-        mock_client.responses.create.assert_called_once()
-
-        # Verify input contains image
-        call_args = mock_client.responses.create.call_args
-        input_items = call_args.kwargs.get("input") or call_args.args[0] if call_args.args else call_args.kwargs["input"]
-        assert any(
-            "input_image" in str(item) or "image_url" in str(item)
-            for item in input_items
-        )
+        with patch("openai.AsyncOpenAI", side_effect=AssertionError("API fallback forbidden")):
+            yield
 
     @pytest.mark.asyncio
-    async def test_structured_output_parsed_from_json(
-        self, monkeypatch, tmp_path
-    ):
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
+    async def test_no_key_uses_subscription_and_returns_text(self, monkeypatch, tmp_path):
         img = tmp_path / "chart.png"
-        img.write_bytes(b"\x89PNG\r\n\x1a\n")
+        img.write_bytes(b"PNG")
+        mock = AsyncMock(return_value="bullish cup-and-handle detected")
+        monkeypatch.setattr("prism_core.codex_subscription.run_stage", mock)
+        from cores.llm.features.vision import analyze_image
+        assert await analyze_image(img, "describe the chart pattern") == "bullish cup-and-handle detected"
+        mock.assert_awaited_once()
+        assert mock.call_args.args[0] == "vision"
+        assert mock.call_args.args[2] == "describe the chart pattern"
+        assert mock.call_args.kwargs["images"] == [img]
 
-        json_payload = json.dumps({"label": "cup-handle", "confidence": 87})
-        mock_response = _make_mock_response(json_payload)
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            from cores.llm.features import vision as vision_module
-            result = await vision_module.analyze_image(
-                str(img), "classify the base", schema=SimpleSchema
-            )
-
+    @pytest.mark.asyncio
+    async def test_structured_output_parsed_from_json(self, monkeypatch):
+        mock = AsyncMock(return_value=json.dumps({"label": "cup-handle", "confidence": 87}))
+        monkeypatch.setattr("prism_core.codex_subscription.run_stage", mock)
+        from cores.llm.features.vision import analyze_image
+        result = await analyze_image(b"PNG", "classify the base", schema=SimpleSchema)
         assert isinstance(result, SimpleSchema)
-        assert result.label == "cup-handle"
-        assert result.confidence == 87
+        assert result.label == "cup-handle" and result.confidence == 87
+        assert mock.call_args.kwargs["response_model"] is SimpleSchema
 
-
-# ---------------------------------------------------------------------------
-# analyze_image — error path: returns None, logs [VISION_ERROR]
-# ---------------------------------------------------------------------------
-
-
-class TestAnalyzeImageErrorPath:
     @pytest.mark.asyncio
-    async def test_api_error_returns_none_and_logs(
-        self, monkeypatch, tmp_path, caplog
-    ):
+    @pytest.mark.parametrize("error", [TimeoutError("timeout"), RuntimeError("quota exceeded")])
+    async def test_subscription_error_returns_none_and_logs(self, monkeypatch, caplog, error):
         import logging
-
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
-        img = tmp_path / "chart.png"
-        img.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        from openai import APIError
-
-        mock_exc = APIError("rate limit hit", request=MagicMock(), body=None)
-        mock_exc.request_id = "req-abc123"  # type: ignore[attr-defined]
-        mock_exc.status_code = 429  # type: ignore[attr-defined]
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(side_effect=mock_exc)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            with caplog.at_level(logging.ERROR, logger="cores.llm.features.vision"):
-                from cores.llm.features import vision as vision_module
-                result = await vision_module.analyze_image(str(img), "analyse")
-
-        assert result is None
-        assert any("[VISION_ERROR]" in record.message for record in caplog.records)
+        monkeypatch.setattr("prism_core.codex_subscription.run_stage", AsyncMock(side_effect=error))
+        from cores.llm.features.vision import analyze_image
+        with caplog.at_level(logging.WARNING, logger="cores.llm.features.vision"):
+            assert await analyze_image(b"PNG", "analyse") is None
+        assert any("[VISION_ERROR]" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_unexpected_error_returns_none(
-        self, monkeypatch, tmp_path, caplog
-    ):
-        import logging
-
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
-        img = tmp_path / "chart.png"
-        img.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(
-            side_effect=RuntimeError("unexpected SDK crash")
-        )
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            with caplog.at_level(logging.ERROR, logger="cores.llm.features.vision"):
-                from cores.llm.features import vision as vision_module
-                result = await vision_module.analyze_image(str(img), "analyse")
-
-        assert result is None
-        assert any("[VISION_ERROR]" in record.message for record in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# Multi-image path (Phase 6 S3.5)
-# ---------------------------------------------------------------------------
-
-
-class TestAnalyzeImageMultiImage:
-    @pytest.mark.asyncio
-    async def test_list_of_two_images_makes_two_input_image_parts(
-        self, monkeypatch
-    ):
-        """A list of 2 images -> 2 input_image parts + 1 input_text in ONE call."""
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
-        mock_response = _make_mock_response("two-timeframe analysis")
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        daily_bytes = b"\x89PNG\r\n\x1a\nDAILY"
-        weekly_bytes = b"\x89PNG\r\n\x1a\nWEEKLY"
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            from cores.llm.features import vision as vision_module
-            result = await vision_module.analyze_image(
-                [daily_bytes, weekly_bytes],
-                "image 1 = DAILY, image 2 = WEEKLY",
-            )
-
-        assert result == "two-timeframe analysis"
-        # Exactly ONE Responses API call for the whole multi-image message.
-        mock_client.responses.create.assert_called_once()
-
-        call_args = mock_client.responses.create.call_args
-        input_items = call_args.kwargs["input"]
-        content = input_items[0]["content"]
-
-        image_parts = [p for p in content if p.get("type") == "input_image"]
-        text_parts = [p for p in content if p.get("type") == "input_text"]
-
-        assert len(image_parts) == 2  # two images, in order
-        assert len(text_parts) == 1   # single text prompt
-        # Image parts must precede the text part.
-        assert content[0]["type"] == "input_image"
-        assert content[1]["type"] == "input_image"
-        assert content[2]["type"] == "input_text"
+    @pytest.mark.parametrize("images", [b"PNG", [b"DAILY", b"WEEKLY"]])
+    async def test_image_order_single_call_and_temp_cleanup(self, monkeypatch, images):
+        from pathlib import Path
+        seen = []
+        async def run(stage, instruction, prompt, **kwargs):
+            paths = kwargs["images"]
+            seen.extend(paths)
+            assert [p.read_bytes() for p in paths] == (images if isinstance(images, list) else [images])
+            return "image analysis"
+        mock = AsyncMock(side_effect=run)
+        monkeypatch.setattr("prism_core.codex_subscription.run_stage", mock)
+        from cores.llm.features.vision import analyze_image
+        assert await analyze_image(images, "daily then weekly") == "image analysis"
+        mock.assert_awaited_once()
+        assert all(not p.exists() for p in seen)
 
     @pytest.mark.asyncio
-    async def test_single_image_still_single_input_image(self, monkeypatch):
-        """Backward compat: a single (non-list) image -> exactly 1 input_image."""
-        monkeypatch.setenv("PRISM_FEATURE_VISION", "on")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-realkey")
-
-        mock_response = _make_mock_response("single-image analysis")
-
-        mock_client = MagicMock()
-        mock_client.responses = MagicMock()
-        mock_client.responses.create = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("openai.AsyncOpenAI", return_value=mock_client):
-            from cores.llm.features import vision as vision_module
-            result = await vision_module.analyze_image(
-                b"\x89PNG\r\n\x1a\n", "single image"
-            )
-
-        assert result == "single-image analysis"
-        mock_client.responses.create.assert_called_once()
-
-        content = mock_client.responses.create.call_args.kwargs["input"][0]["content"]
-        image_parts = [p for p in content if p.get("type") == "input_image"]
-        text_parts = [p for p in content if p.get("type") == "input_text"]
-        assert len(image_parts) == 1
-        assert len(text_parts) == 1
+    async def test_invalid_structured_answer_returns_none(self, monkeypatch):
+        monkeypatch.setattr("prism_core.codex_subscription.run_stage", AsyncMock(return_value='{"label": "missing confidence"}'))
+        from cores.llm.features.vision import analyze_image
+        assert await analyze_image(b"PNG", "analyse", schema=SimpleSchema) is None

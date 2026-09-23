@@ -13,6 +13,7 @@ message, JSON, or markdown.
 """
 
 from __future__ import annotations
+from prism_core.ai_models import settings
 
 import asyncio
 import json
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-_DEFAULT_MODEL = "gpt-5.4-mini"
+_DEFAULT_MODEL = settings('archive_insight').model
 
 
 def _sanitize_for_llm(text: str, max_len: int = 3000) -> str:
@@ -92,7 +93,7 @@ class AutoInsight:
         model: str = _DEFAULT_MODEL,
     ):
         self.db_path = db_path or str(ARCHIVE_DB_PATH)
-        self.model = model
+        self.model = settings('archive_insight').model
         self._query_engine: Optional[QueryEngine] = None
 
     @property
@@ -518,6 +519,7 @@ class AutoInsight:
                     )
                 )
                 narrative = await synthesize(
+                    stage="archive_insight",
                     query=f"{week_start}~{week_end} 주간 분석 성과를 요약하고 인사이트를 제시하세요.",
                     context=context,
                     api_key=api_key,
@@ -615,7 +617,8 @@ class AutoInsight:
         )
         try:
             from .query_engine import _get_openai_client
-            client = _get_openai_client(api_key)
+            from prism_core.codex_subscription import SubscriptionChatClient
+            client = SubscriptionChatClient('archive_insight')
             resp = await client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -751,7 +754,8 @@ class AutoInsight:
         )
 
         from .query_engine import _get_openai_client
-        client = _get_openai_client(api_key)
+        from prism_core.codex_subscription import SubscriptionChatClient
+        client = SubscriptionChatClient('archive_insight')
 
         total_inserted = 0
         for ticker, items in eligible.items():

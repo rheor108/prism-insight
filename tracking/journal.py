@@ -105,7 +105,8 @@ class JournalManager:
         try:
             from cores.agents.trading_journal_agent import create_trading_journal_agent
             from mcp_agent.workflows.llm.augmented_llm import RequestParams
-            from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+            from cores.llm.subscription_llm import llm_for
+            OpenAIAugmentedLLM = llm_for('journal')
 
             ticker = stock_data.get('ticker', '')
             company_name = stock_data.get('company_name', '')
@@ -133,31 +134,12 @@ class JournalManager:
             )
 
             import os as _os
-            if _os.getenv("LLM_BACKEND", "mcp_agent") == "openai_agents":
-                from cores.llm.agent_bridge import (
-                    ensure_openai_agents_configured,
-                    get_llm_backend,
-                    spec_from_mcp_agent,
+            async with journal_agent:
+                llm = await journal_agent.attach_llm(OpenAIAugmentedLLM)
+                response = await llm.generate_str(
+                    message=prompt,
+                    request_params=RequestParams(model="gpt-5.4-mini", reasoning_effort="none", maxTokens=16000)
                 )
-                from cores.llm.config_loader import load_mcp_registry
-                from cores.llm.ports import LLMParams
-
-                ensure_openai_agents_configured()
-                registry = load_mcp_registry()
-                spec = spec_from_mcp_agent(
-                    journal_agent,
-                    model="gpt-5.4-mini",
-                    params=LLMParams(max_tokens=16000, reasoning_effort="none"),
-                )
-                result = await get_llm_backend(registry).run(spec, prompt)
-                response = result.text
-            else:
-                async with journal_agent:
-                    llm = await journal_agent.attach_llm(OpenAIAugmentedLLM)
-                    response = await llm.generate_str(
-                        message=prompt,
-                        request_params=RequestParams(model="gpt-5.4-mini", reasoning_effort="none", maxTokens=16000)
-                    )
             logger.info(f"Journal agent response received: {len(response)} chars")
 
             # Parse and save

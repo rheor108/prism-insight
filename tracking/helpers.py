@@ -60,7 +60,7 @@ async def get_current_stock_price(cursor, ticker: str, account_key: str | None =
         float: Current stock price
     """
     import asyncio
-    from krx_data_client import get_nearest_business_day_in_a_week, get_market_ohlcv_by_ticker
+    from krx_data_client import KRXAuthError, get_nearest_business_day_in_a_week, get_market_ohlcv_by_ticker
     import datetime
 
     # KRX API (data.krx.co.kr) can intermittently time out. Retry the transient
@@ -88,6 +88,12 @@ async def get_current_stock_price(cursor, ticker: str, account_key: str | None =
         except Exception as e:
             logger.error(f"Error querying current price for {ticker} "
                          f"(attempt {attempt + 1}/{MAX_RETRIES}): {str(e)}")
+            if isinstance(e, KRXAuthError):
+                # Auth/backoff cannot improve by replaying the same request.
+                kis_price = await _get_price_from_kis(ticker)
+                if kis_price > 0:
+                    return kis_price
+                return _get_last_price_from_db(cursor, ticker, account_key=account_key)
             if attempt < MAX_RETRIES - 1:
                 wait = 2 * (attempt + 1)  # 2s, 4s exponential-ish backoff
                 logger.warning(f"{ticker} price query retry in {wait}s")
@@ -114,7 +120,7 @@ async def _get_price_from_kis(ticker: str) -> float:
     import asyncio
     try:
         from trading.domestic_stock_trading import AsyncTradingContext
-        async with AsyncTradingContext() as trading:
+        async with AsyncTradingContext(auto_trading=False) as trading:
             info = await asyncio.to_thread(trading.get_current_price, ticker)
         price = float((info or {}).get("current_price") or 0)
         if price > 0:
@@ -276,43 +282,10 @@ PYRAMID_MAX_ROWS = 3
 _HOLDINGS_TABLE = "stock_holdings"
 
 
-def get_existing_position_for_ticker(
-    cursor,
-    ticker: str,
-    account_key: str | None = None,
-    table_name: str = _HOLDINGS_TABLE,
-) -> Dict[str, Any]:
-    """Aggregate the existing holding for a ticker/account.
-
-    Returns a dict with:
-        row_count: number of existing rows for (ticker, account)
-        avg_buy_price: simple average buy_price across those rows (0 if none)
-    Used by the pyramiding add-gate.
-
-    NOTE (#288, intentional): ``avg_buy_price`` is a SIMPLE MEAN of per-row entry
-    prices, NOT a share-weighted average. The independent-row model deliberately
-    stores no per-row quantity in ``stock_holdings``, and each add is ~1 unit, so
-    the simple mean is an accurate-enough proxy for both the +5% profit gate and
-    the Telegram "누적 평단" display.
-    """
-    try:
-        if account_key:
-            cursor.execute(
-                f"SELECT buy_price FROM {table_name} WHERE ticker = ? AND account_key = ?",
-                (ticker, account_key),
-            )
-        else:
-            cursor.execute(
-                f"SELECT buy_price FROM {table_name} WHERE ticker = ?",
-                (ticker,),
-            )
-        prices = [float(r[0]) for r in cursor.fetchall() if r[0] is not None]
-        row_count = len(prices)
-        avg_buy_price = (sum(prices) / row_count) if row_count else 0.0
-        return {"row_count": row_count, "avg_buy_price": avg_buy_price}
-    except Exception as e:
-        logger.error(f"Error querying existing position for {ticker}: {str(e)}")
-        return {"row_count": 0, "avg_buy_price": 0.0}
+def get_existing_position_for_ticker(cursor, ticker: str, account_key: str | None = None, table_name: str = _HOLDINGS_TABLE) -> Dict[str, Any]:
+    """Quantity-weighted confirmed cost; unverified positions cannot pass a profit gate."""
+    from prism_core.entry_costs import weighted_position
+    return weighted_position(cursor, table_name, ticker, account_key)
 
 
 def _regime_label(market_condition: str | None) -> str:

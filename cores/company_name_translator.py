@@ -84,7 +84,8 @@ async def translate_company_name(korean_name: str) -> str:
         return _translation_cache[korean_name]
 
     try:
-        from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+        from cores.llm.subscription_llm import llm_for
+        OpenAIAugmentedLLM = llm_for('company_translation')
         from mcp_agent.workflows.llm.augmented_llm import RequestParams
         from mcp_agent.agents.agent import Agent
 

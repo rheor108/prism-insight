@@ -809,6 +809,8 @@ def create_all_tables(cursor, conn):
     migrate_analysis_performance_tracker_columns(cursor, conn)
     migrate_trading_history_columns(cursor, conn)
     migrate_trading_journal_exit_intent(cursor, conn)
+    from prism_core.entry_costs import ensure_entry_cost_schema
+    ensure_entry_cost_schema(conn, "KR")
     conn.commit()
     logger.info("Database tables created")
 

@@ -19,7 +19,8 @@ import traceback
 
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
 from cores.llm.codex_oauth_fast_backend import generate_codex_fast
-from cores.llm.openai_responses_llm import OpenAIResponsesLLM as OpenAIAugmentedLLM
+from cores.llm.subscription_llm import llm_for
+OpenAIAugmentedLLM = llm_for('kr_sell')
 
 # Import core agents
 from cores.agents.trading_agents import create_sell_decision_agent
@@ -922,6 +923,7 @@ class EnhancedStockTrackingAgent(StockTrackingAgent):
                         continue
 
                     # Process buy (is_add => pyramiding additional independent row, #288)
+                    entry_message_start = len(self.message_queue)
                     buy_result = await self._buy_stock_with_position(
                         ticker,
                         company_name,
@@ -978,6 +980,11 @@ class EnhancedStockTrackingAgent(StockTrackingAgent):
                                 account_key=account_key,
                                 intent_id=persisted_intent_id,
                             )
+
+                        from prism_core.failed_entries import compensate_agent_rejection
+                        if compensate_agent_rejection(self, "KR", buy_result.legacy_holding_id, trade_result, entry_message_start):
+                            logger.warning("ENTRY_REJECTED_COMPENSATED: market=KR ticker=%s", ticker)
+                            continue
 
                         if trade_result['success']:
                             logger.info(f"Actual purchase successful: {trade_result['message']}")
@@ -1482,10 +1489,7 @@ class EnhancedStockTrackingAgent(StockTrackingAgent):
                 """
 
             response = None
-            codex_sell_enabled = os.environ.get(
-                "PRISM_KR_CODEX_FAST_SELL",
-                os.environ.get("PRISM_KR_CODEX_FAST_TRADING", "0"),
-            ).strip().lower() in {"1", "true", "yes", "on"}
+            codex_sell_enabled = False  # Replaced by stage-based subscription backend
             if codex_sell_enabled:
                 try:
                     instruction = str(

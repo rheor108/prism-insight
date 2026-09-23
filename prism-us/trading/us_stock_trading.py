@@ -1081,7 +1081,7 @@ class USStockTrading:
 
             if res.isOK():
                 output = res.getBody().output
-                order_no = output.get('ODNO', '') or output.get('RSVN_ORD_SEQ', '')
+                order_no = output.get('ODNO', '') or output.get('OVRS_RSVN_ODNO', '') or output.get('RSVN_ORD_SEQ', '')
 
                 logger.info(f"[{ticker}] Reserved buy order success: {buy_quantity} shares x ${limit_price:.2f}, Order#: {order_no}")
 
@@ -1486,6 +1486,9 @@ class USStockTrading:
                         if buy_result['success']:
                             result['success'] = True
                             result['order_no'] = buy_result['order_no']
+                            # Retain queue/reservation identity for next-batch fill matching.
+                            if buy_result.get('order_type'):
+                                result['order_type'] = buy_result['order_type']
                             result['message'] = f"Buy completed: {buy_quantity} shares x ${current_price:.2f} = ${result['total_amount']:.2f}"
                         else:
                             if buy_result.get('outcome_unknown'):
@@ -1643,6 +1646,17 @@ class USStockTrading:
                     await asyncio.sleep(0.1)
 
         return result
+
+    def get_entry_cost_snapshot(self, start: str, end: str) -> dict:
+        """Read-only account-scoped balance and buy-fill inquiry for batch correction."""
+        from prism_core.entry_cost_inquiry import read_entry_cost_snapshot
+        with ka.get_trading_env_lock():
+            self._activate_account()
+            return read_entry_cost_snapshot(
+                ka._url_fetch, market="US", account_key=self.account_key,
+                account_no=self.trenv.my_acct, product=self.trenv.my_prod,
+                mode=self.mode, start=start, end=end,
+            )
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
         """

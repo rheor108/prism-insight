@@ -10,7 +10,7 @@ from report_model_config import REPORT_AUX_EFFORT, REPORT_AUX_MODEL
 import cores.openai_debug  # noqa: F401 — OpenAI 400/429 request metadata logging
 from mcp_agent.app import MCPApp
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
-from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
+from cores.llm.subscription_llm import summary_factory
 from mcp_agent.workflows.evaluator_optimizer.evaluator_optimizer import (
     EvaluatorOptimizerLLM,
     QualityRating,
@@ -64,6 +64,9 @@ class _RobustEvaluatorLLM:
             return await self._llm.generate_structured(message, response_model, request_params)
         except Exception as e:
             log_openai_error(logger, e, "telegram summary evaluator structured generation")
+            from prism_core.inference_errors import should_retry
+            if not should_retry(e):
+                raise
             logger.warning(f"generate_structured failed ({e}), retrying with JSON extraction fallback")
             text = await self._llm.generate_str(message=message, request_params=request_params)
             candidate = _extract_last_valid_json(text)
@@ -108,7 +111,7 @@ class TelegramSummaryGenerator:
         """
         Extract ticker code, company name, date etc. from filename
         """
-        pattern = r'(\w+)_(.+)_(\d{8})_.*\.pdf'
+        pattern = r'^([^_]+)_(.+)_(\d{8})_.*\.pdf$'
         match = re.match(pattern, filename)
 
         if match:
@@ -269,7 +272,7 @@ class TelegramSummaryGenerator:
         evaluator_optimizer = EvaluatorOptimizerLLM(
             optimizer=optimizer,
             evaluator=evaluator,
-            llm_factory=OpenAIAugmentedLLM,
+            llm_factory=summary_factory(optimizer, evaluator),
             min_rating=QualityRating.EXCELLENT
         )
 

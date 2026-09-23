@@ -12,6 +12,7 @@ Pipeline:
 """
 
 from __future__ import annotations
+from prism_core.ai_models import settings
 
 import asyncio
 import hashlib
@@ -44,7 +45,7 @@ _SECRETS_PATH = PROJECT_ROOT / "mcp_agent.secrets.yaml"
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL = "gpt-5.4-mini"
+_DEFAULT_MODEL = settings('archive_query').model
 _MAX_CONTEXT_CHARS = 8_000   # approximate token budget for retrieved context
 _MAX_REPORTS_IN_CONTEXT = 6
 _CACHE_TTL_HOURS = 24
@@ -81,15 +82,9 @@ class QueryResult:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_api_key() -> Optional[str]:
-    """Read OpenAI API key from mcp_agent.secrets.yaml."""
-    try:
-        with open(_SECRETS_PATH) as f:
-            secrets = yaml.safe_load(f)
-        return (secrets or {}).get("openai", {}).get("api_key")
-    except Exception as e:
-        logger.debug(f"Could not load secrets: {e}")
-    return None
+def load_api_key() -> str:
+    """Legacy readiness marker; never a Platform API credential."""
+    return 'codex-subscription'
 
 
 def _query_hash(text: str, market: Optional[str], ticker: Optional[str],
@@ -98,7 +93,8 @@ def _query_hash(text: str, market: Optional[str], ticker: Optional[str],
     outcome_key = ""
     if outcome_filter:
         outcome_key = "|".join(f"{k}={outcome_filter[k]}" for k in sorted(outcome_filter))
-    key = f"{text}|{market}|{ticker}|{date_from}|{date_to}|{outcome_key}"
+    choice = settings("archive_query")
+    key = f"codex_subscription|{choice.model}|{choice.effort}|{text}|{market}|{ticker}|{date_from}|{date_to}|{outcome_key}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
@@ -380,30 +376,14 @@ def _build_context(snippets: List[ReportSnippet], max_chars: int = _MAX_CONTEXT_
     return "".join(lines)
 
 
-def _get_openai_client(api_key: str):
-    """
-    Create an AsyncOpenAI client respecting PRISM_OPENAI_AUTH_MODE.
-
-    When ``chatgpt_oauth`` mode is active, uses the ChatGPT proxy endpoint.
-    Otherwise falls back to standard OpenAI API with the provided key.
-    """
-    import os
-
-    import openai
-
-    auth_mode = os.environ.get("PRISM_OPENAI_AUTH_MODE", "api_key")
-    if auth_mode == "chatgpt_oauth":
-        try:
-            from cores.chatgpt_proxy.constants import CHATGPT_BASE_URL  # type: ignore[import]
-            return openai.AsyncOpenAI(api_key=api_key, base_url=CHATGPT_BASE_URL)
-        except ImportError:
-            logger.debug("chatgpt_proxy not available, falling back to api_key mode")
-    return openai.AsyncOpenAI(api_key=api_key)
+def _get_openai_client(api_key=None):
+    from prism_core.codex_subscription import SubscriptionChatClient
+    return SubscriptionChatClient('archive_query')
 
 
 async def synthesize(query: str, context: str, api_key: str,
-                       model: str) -> str:
-    """Call OpenAI chat completion to synthesize an insight from retrieved context."""
+                       model: str, stage: str = 'archive_query') -> str:
+    """Synthesize retrieved context using the configured Codex stage."""
     try:
         import openai  # noqa: F811 — lazy; _get_openai_client also imports
     except ImportError:
@@ -419,7 +399,8 @@ async def synthesize(query: str, context: str, api_key: str,
     )
 
     try:
-        client = _get_openai_client(api_key)
+        from prism_core.codex_subscription import SubscriptionChatClient
+        client = SubscriptionChatClient(stage)
         # GPT-5.x reasoning models: use max_completion_tokens and pin reasoning off.
         # 800 was too tight — reasoning tokens count toward the cap even when
         # effort="none", so give Korean 400~800자 output real headroom.
@@ -463,7 +444,7 @@ class QueryEngine:
         cache_ttl_hours: int = _CACHE_TTL_HOURS,
     ):
         self.db_path = db_path or str(ARCHIVE_DB_PATH)
-        self.model = model
+        self.model = settings('archive_query').model
         self.cache_ttl_hours = cache_ttl_hours
         self._api_key: Optional[str] = None
 

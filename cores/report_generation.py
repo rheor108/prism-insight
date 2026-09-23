@@ -1,51 +1,18 @@
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from cores.report_integrity import source_contract, validate_sections
+from prism_core.ai_models import REPORT_STAGES
+from prism_core.inference_errors import should_retry
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from cores.agents.report_agent import ReportAgent
-from cores.llm.agent_bridge import ensure_openai_agents_configured
-from cores.llm.backends.openai_agents_backend import OpenAIAgentsBackend
-from cores.llm.config_loader import load_report_mcp_registry
-from cores.llm.ports import AgentSpec, LLMParams
 from report_model_config import REPORT_EFFORT, REPORT_MODEL
 from cores.openai_error_logging import log_openai_error
 
-# Report LLM model/effort are shared with macro, summaries and artifact names.
-# Long-form reports keep medium reasoning for cross-source reconciliation and
-# numeric strategy synthesis. Auxiliary report tasks use the separate low-effort
-# contract; the Responses API backend remains required for gpt-5.6 tool calls.
-
-_report_backend = None
+# Stage choices are resolved at each call from config/ai_models.json.
 
 
-def _get_report_backend():
-    """Lazily configure the SDK and native MCP registry for report calls."""
-    global _report_backend
-    if _report_backend is None:
-        ensure_openai_agents_configured()
-        _report_backend = OpenAIAgentsBackend(load_report_mcp_registry())
-    return _report_backend
+async def _generate_agent_text(agent, message, *, stage, max_tokens, max_iterations):
+    from prism_core.codex_subscription import run_with_registry
+    return await run_with_registry(stage, agent.instruction, message, agent.server_names)
 
-
-async def _generate_agent_text(
-    agent,
-    message: str,
-    *,
-    max_tokens: int,
-    max_iterations: int,
-) -> str:
-    """Run one SDK-neutral report definition through the shared LLM port."""
-    spec = AgentSpec(
-        name=agent.name,
-        instructions=agent.instruction,
-        model=REPORT_MODEL,
-        mcp_servers=tuple(agent.server_names),
-        params=LLMParams(
-            max_tokens=max_tokens,
-            reasoning_effort=REPORT_EFFORT,
-            parallel_tool_calls=True,
-            max_iterations=max_iterations,
-        ),
-    )
-    result = await _get_report_backend().run(spec, message)
-    return result.text
 
 
 # Language name mapping for report generation
@@ -63,7 +30,8 @@ LANGUAGE_NAMES = {
 @retry(
     stop=stop_after_attempt(2),  # Maximum 2 attempts (initial + 1 retry)
     wait=wait_exponential(multiplier=1, min=10, max=30),  # Exponentially increasing wait time
-    retry=retry_if_exception_type(Exception)  # Retry on all exceptions
+    retry=retry_if_exception(should_retry),
+    reraise=True
 )
 async def generate_report(agent, section, company_name, company_code, reference_date, logger, language="ko"):
     """
@@ -145,13 +113,15 @@ async def generate_report(agent, section, company_name, company_code, reference_
     try:
         report = await _generate_agent_text(
             agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
+            stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=10,
         )
     except Exception as e:
         log_openai_error(logger, e, f"report generation for {section}")
         raise
+    validate_sections({section: report}, [section])
     logger.info(f"Completed {section} - {len(report)} characters")
     return report
 
@@ -233,13 +203,15 @@ async def generate_market_report(agent, section, reference_date, logger, languag
     try:
         report = await _generate_agent_text(
             agent,
-            message,
+            message + source_contract("market indices", "market", reference_date),
+            stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=3,
         )
     except Exception as e:
         log_openai_error(logger, e, f"market report generation for {section}")
         raise
+    validate_sections({section: report}, [section])
     logger.info(f"Completed {section} - {len(report)} characters")
     return report
 
@@ -337,18 +309,17 @@ Comprehensive Analysis Report:
 
         executive_summary = await _generate_agent_text(
             summary_agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
+            stage="report_summary",
             max_tokens=16000,
             max_iterations=2,
         )
+        validate_sections({"summary": executive_summary}, ["summary"])
         return executive_summary
     except Exception as e:
         log_openai_error(logger, e, f"executive summary generation for {company_name}")
         logger.error(f"Error generating executive summary: {e}")
-        if language == "ko":
-            return "## 핵심 요약\n\n분석 요약을 생성하는 데 문제가 발생했습니다."
-        else:
-            return "## Executive Summary\n\nA problem occurred while generating the analysis summary."
+        raise
 
 
 async def generate_investment_strategy(section_reports, combined_reports, company_name, company_code, reference_date, logger, language="ko"):
@@ -565,10 +536,12 @@ Please present a consistent and executable investment strategy that investors ca
 
         investment_strategy = await _generate_agent_text(
             investment_strategy_agent,
-            message,
+            message + source_contract(company_name, company_code, reference_date),
+            stage="strategy",
             max_tokens=32000,
             max_iterations=3,
         )
+        validate_sections({"investment_strategy": investment_strategy}, ["investment_strategy"])
         logger.info(f"Completed investment_strategy - {len(investment_strategy)} characters")
         return investment_strategy
     except Exception as e:

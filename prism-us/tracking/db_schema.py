@@ -681,6 +681,8 @@ def create_us_tables(cursor, conn):
 
     migrate_multi_account_schema(cursor, conn)
     migrate_drop_us_holdings_unique_constraint(cursor, conn)
+    from prism_core.entry_costs import ensure_entry_cost_schema
+    ensure_entry_cost_schema(conn, "US")
     migrate_us_trading_history_columns(cursor, conn)
     conn.commit()
     logger.info("US database tables created")
@@ -999,34 +1001,9 @@ US_PYRAMID_MAX_ROWS = 3
 
 
 def get_us_existing_position_for_ticker(cursor, ticker: str, account_key: Optional[str] = None) -> dict:
-    """Aggregate the existing US holding for a ticker/account.
-
-    Returns {row_count, avg_buy_price}. Used by the pyramiding add-gate.
-
-    NOTE (#288, intentional): ``avg_buy_price`` is a SIMPLE MEAN of per-row entry
-    prices, NOT a share-weighted average. The independent-row model deliberately
-    stores no per-row quantity in ``us_stock_holdings``, and each add is ~1 unit,
-    so the simple mean is an accurate-enough proxy for both the +5% profit gate
-    and the Telegram "New Avg Price" display.
-    """
-    try:
-        if account_key:
-            cursor.execute(
-                "SELECT buy_price FROM us_stock_holdings WHERE ticker = ? AND account_key = ?",
-                (ticker, account_key),
-            )
-        else:
-            cursor.execute(
-                "SELECT buy_price FROM us_stock_holdings WHERE ticker = ?",
-                (ticker,),
-            )
-        prices = [float(r[0]) for r in cursor.fetchall() if r[0] is not None]
-        row_count = len(prices)
-        avg_buy_price = (sum(prices) / row_count) if row_count else 0.0
-        return {"row_count": row_count, "avg_buy_price": avg_buy_price}
-    except Exception as e:
-        logger.error(f"Error querying existing US position for {ticker}: {e}")
-        return {"row_count": 0, "avg_buy_price": 0.0}
+    """Quantity-weighted confirmed cost; unverified positions cannot pass a profit gate."""
+    from prism_core.entry_costs import weighted_position
+    return weighted_position(cursor, "us_stock_holdings", ticker, account_key)
 
 
 def _us_regime_label(market_condition) -> str:
