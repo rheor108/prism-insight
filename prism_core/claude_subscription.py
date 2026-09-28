@@ -166,7 +166,7 @@ async def invoke(choice, prompt, *, images=(), web_search=False):
                       'call_id': call_id, 'stage': choice.key, 'model': choice.model,
                       'effort': choice.effort, 'outcome': outcome, 'attempts': attempts,
                       'attempt_errors': attempt_errors,
-                      'tokens_complete': not attempt_errors,
+                      'tokens_complete': outcome == 'success' and not attempt_errors,
                       'duration_seconds': round(time.monotonic() - start, 3),
                       'tokens': usage, 'error_code': error_code,
                       'token_semantics': 'input_excludes_cache_reads_and_creation',
