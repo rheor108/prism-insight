@@ -10,7 +10,7 @@ import time
 import uuid
 
 from prism_core.inference_errors import InferenceError
-from jsonschema import validate
+from jsonschema import validate, ValidationError
 from prism_core import codex_metrics as metrics
 
 
@@ -35,17 +35,22 @@ def command(binary, choice, schema):
 def classify_failure(stdout, stderr):
     # Classify only failure text, never persist raw provider output.
     text = stderr.decode(errors='replace')
+    subtype = None
     try:
         result = json.loads(stdout)
+        subtype = result.get('subtype')
         if result.get('is_error'):
             text += str(result.get('result', '')) + str(result.get('errors', ''))
     except (ValueError, AttributeError):
         pass
+    if subtype == 'error_max_structured_output_retries':
+        return InferenceError('claude_output_format')
     for code, pattern, retryable in [
         ('claude_authentication', r'not logged in|authentication|oauth|401|login required', False),
         ('claude_quota', r'usage limit|rate.?limit|429|quota', False),
         ('claude_context', r'prompt is too long|context.{0,20}(limit|length)|too many tokens', False),
-        ('claude_schema', r'json.?schema|structured.output|invalid schema', False),
+        ('claude_schema', r'invalid.{0,30}schema|schema.{0,30}(invalid|unsupported)|json.?schema', False),
+        ('claude_output_format', r'structured.output', False),
         ('claude_connection', r'connection|network|ECONN|timed out|503|overloaded', True),
     ]:
         if re.search(pattern, text, re.I):
@@ -55,7 +60,7 @@ def classify_failure(stdout, stderr):
 
 def parse_result(stdout, model, schema):
     result = json.loads(stdout)
-    if result.get('is_error'):
+    if result.get('is_error') or str(result.get('subtype', '')).startswith('error_'):
         raise classify_failure(stdout, b'')
     used = result.get('modelUsage', {})
     if not any(n == model or n.startswith(model + '-') for n in used) or any(
@@ -89,6 +94,8 @@ async def invoke(choice, prompt, *, images=(), web_search=False):
     call_id = uuid.uuid4().hex[:12]
     outcome, usage = 'failure', {}
     error_code = None
+    attempts = 0
+    attempt_errors = []
     try:
         async with asyncio.timeout(choice.timeout_seconds):
             with tempfile.TemporaryDirectory(prefix='prism-claude-') as cwd:
@@ -100,16 +107,52 @@ async def invoke(choice, prompt, *, images=(), web_search=False):
                 state = json.loads(stdout)
                 if process.returncode or not state.get('loggedIn') or state.get('authMethod') != 'claude.ai':
                     raise InferenceError('claude_authentication')
-                process = await asyncio.create_subprocess_exec(
-                    *command(binary, choice, ENVELOPE), env=env, cwd=cwd,
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, start_new_session=True)
-                stdout, stderr = await process.communicate(prompt.encode())
-                if process.returncode:
-                    raise classify_failure(stdout, stderr)
-                result, usage = parse_result(stdout, choice.model, ENVELOPE)
-                outcome = 'success'
-                return result
+                for attempt in range(1, 3):
+                    attempts = attempt
+                    attempt_start = time.monotonic()
+                    process = await asyncio.create_subprocess_exec(
+                        *command(binary, choice, ENVELOPE), env=env, cwd=cwd,
+                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE, start_new_session=True)
+                    # Only repeat this pure inference call: parent tools have not run.
+                    repair = ('\nTransport correction: return exactly the outer JSON object '
+                              'with answer (string) and calls (array). Put any requested '
+                              'evaluation JSON inside the answer STRING, not at the top level. '
+                              'Escape quotes/newlines as JSON. No XML or Markdown fences. '
+                              'Keep the complete task answer; do not return placeholders.\n')
+                    stdout, stderr = await process.communicate(
+                        (prompt + (repair if attempt > 1 else '')).encode())
+                    failure = None
+                    try:
+                        if process.returncode:
+                            raise classify_failure(stdout, stderr)
+                        result, current_usage = parse_result(stdout, choice.model, ENVELOPE)
+                        for key, value in current_usage.items():
+                            usage[key] = usage.get(key, 0) + value
+                    except (json.JSONDecodeError, ValidationError):
+                        failure = InferenceError('claude_output_format')
+                    except InferenceError as exc:
+                        failure = exc
+                    if failure is None:
+                        metrics.emit({'kind': 'attempt', 'provider': 'claude_subscription',
+                                      'call_id': call_id, 'stage': choice.key,
+                                      'model': choice.model, 'effort': choice.effort,
+                                      'attempt': attempt, 'outcome': 'success',
+                                      'tokens': current_usage,
+                                      'duration_seconds': round(time.monotonic()-attempt_start, 3)})
+                        outcome = 'success'
+                        return result
+                    attempt_errors.append(failure.code)
+                    metrics.emit({'kind': 'attempt', 'provider': 'claude_subscription',
+                                  'call_id': call_id, 'stage': choice.key,
+                                  'model': choice.model, 'effort': choice.effort,
+                                  'attempt': attempt, 'outcome': 'failure',
+                                  'error_code': failure.code,
+                                  'duration_seconds': round(time.monotonic()-attempt_start, 3)})
+                    if failure.code != 'claude_output_format' or attempt == 2:
+                        raise failure
+                    await _terminate(process)
+
     except TimeoutError:
         error_code = 'claude_timeout'
         raise
@@ -121,7 +164,9 @@ async def invoke(choice, prompt, *, images=(), web_search=False):
             await _terminate(process)
         metrics.emit({'kind': 'call', 'provider': 'claude_subscription',
                       'call_id': call_id, 'stage': choice.key, 'model': choice.model,
-                      'effort': choice.effort, 'outcome': outcome, 'attempts': 1,
+                      'effort': choice.effort, 'outcome': outcome, 'attempts': attempts,
+                      'attempt_errors': attempt_errors,
+                      'tokens_complete': not attempt_errors,
                       'duration_seconds': round(time.monotonic() - start, 3),
                       'tokens': usage, 'error_code': error_code,
                       'token_semantics': 'input_excludes_cache_reads_and_creation',
