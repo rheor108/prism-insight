@@ -102,3 +102,64 @@ async def test_timeout_terminates_claude_child(monkeypatch):
     with pytest.raises(TimeoutError):
         await claude.invoke(replace(settings('news'), timeout_seconds=0.01), 'test')
     terminate.assert_awaited_once_with(process)
+
+
+def test_schema_definition_and_output_exhaustion_are_distinct():
+    exhausted = json.dumps({'is_error': True, 'subtype': 'error_max_structured_output_retries'}).encode()
+    assert claude.classify_failure(exhausted, b'').code == 'claude_output_format'
+    assert claude.classify_failure(b'{}', b'invalid JSON schema').code == 'claude_schema'
+    assert claude.classify_failure(b'{}', b'Could not produce structured output').code == 'claude_output_format'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure,exit_code,expected,retries', [
+    ({'is_error': True, 'subtype': 'error_max_structured_output_retries'}, 1, None, 2),
+    ({'is_error': True, 'result': 'structured output failed'}, 0, None, 2),
+    ({'structured_output': {'answer': 5}, 'modelUsage': {'claude-sonnet-5': {}}}, 0, None, 2),
+    ({'is_error': True, 'result': 'invalid JSON schema'}, 1, 'claude_schema', 1),
+    ({'is_error': True, 'result': 'usage limit'}, 1, 'claude_quota', 1),
+    ({'is_error': True, 'result': 'not logged in'}, 1, 'claude_authentication', 1),
+])
+async def test_bounded_format_recovery(monkeypatch, failure, exit_code, expected, retries):
+    from types import SimpleNamespace
+    auth = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(
+        b'{"loggedIn":true,"authMethod":"claude.ai"}', b'')))
+    failed = SimpleNamespace(returncode=exit_code, communicate=AsyncMock(return_value=(json.dumps(failure).encode(), b'')))
+    success = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(result().encode(), b'')))
+    spawn = AsyncMock(side_effect=[auth, failed, success])
+    monkeypatch.setattr(claude.asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(claude.shutil, 'which', lambda _: '/bin/true')
+    monkeypatch.setattr(codex, '_terminate', AsyncMock())
+    events = []
+    monkeypatch.setattr(claude.metrics, 'emit', events.append)
+    if expected:
+        with pytest.raises(RuntimeError, match=expected):
+            await claude.invoke(settings('news'), 'synthetic task')
+    else:
+        assert (await claude.invoke(settings('news'), 'synthetic task'))['answer'] == 'ok'
+        assert b'Transport correction' in success.communicate.await_args.args[0]
+    assert spawn.await_count == 1 + retries
+    assert events[-1]['attempts'] == retries
+    assert events[-1]['tokens_complete'] is False
+    assert events[-1]['attempt_errors']
+
+
+@pytest.mark.asyncio
+async def test_format_recovery_stops_after_second_failure(monkeypatch):
+    from types import SimpleNamespace
+    auth = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(
+        b'{"loggedIn":true,"authMethod":"claude.ai"}', b'')))
+    failed = SimpleNamespace(returncode=1, communicate=AsyncMock(return_value=(
+        b'{"is_error":true,"subtype":"error_max_structured_output_retries"}', b'')))
+    spawn = AsyncMock(side_effect=[auth, failed, failed])
+    monkeypatch.setattr(claude.asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(claude.shutil, 'which', lambda _: '/bin/true')
+    monkeypatch.setattr(codex, '_terminate', AsyncMock())
+    events=[]
+    monkeypatch.setattr(claude.metrics, 'emit', events.append)
+    with pytest.raises(RuntimeError, match='claude_output_format'):
+        await claude.invoke(settings('news'), 'synthetic task')
+    assert spawn.await_count == 3
+    assert events[-1]['outcome'] == 'failure'
+    assert events[-1]['attempts'] == 2
+    assert events[-1]['error_code'] == 'claude_output_format'
