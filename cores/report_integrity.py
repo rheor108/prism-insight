@@ -3,19 +3,27 @@ import re
 
 
 class IncompleteReportError(ValueError):
-    pass
+    def __init__(self, reasons):
+        self.reasons = dict(reasons)
+        super().__init__('REPORT_INCOMPLETE: ' + ','.join(reasons) +
+                         ' (' + ','.join(f'{k}={v}' for k, v in reasons.items()) + ')')
 
 
 def validate_sections(sections, required):
-    invalid = []
+    invalid = {}
     for name in required:
         text = str(sections.get(name) or '').strip()
         body = re.sub(r'^\s*#{1,6}[^\n]*$', '', text, flags=re.M).strip()
-        if (not body or body.casefold() in {'테스트', 'test', 'testing', 'todo', 'placeholder'}
-                or re.search(r'REPORT_DATA_UNAVAILABLE|Analysis failed:|Investment strategy analysis failed', text, re.I)):
-            invalid.append(name)
+        if not body:
+            invalid[name] = 'empty_body'
+        elif body.casefold() in {'테스트', 'test', 'testing', 'todo', 'placeholder'}:
+            invalid[name] = 'placeholder'
+        elif re.search(r'REPORT_DATA_UNAVAILABLE', text, re.I):
+            invalid[name] = 'source_unavailable'
+        elif re.search(r'Analysis failed:|Investment strategy analysis failed', text, re.I):
+            invalid[name] = 'upstream_failure'
     if invalid:
-        raise IncompleteReportError('REPORT_INCOMPLETE: ' + ','.join(invalid))
+        raise IncompleteReportError(invalid)
 
 
 def source_contract(company_name, company_code, reference_date):
