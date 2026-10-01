@@ -200,9 +200,9 @@ async def invoke(choice, prompt, *, images=(), web_search=False, response_schema
                         raise failure
                     await _terminate(process)
 
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         error_code = 'claude_timeout'
-        raise
+        raise TimeoutError('Claude inference timed out') from None
     except InferenceError as exc:
         error_code = exc.code
         raise
