@@ -1,7 +1,7 @@
-from cores.report_integrity import source_contract, validate_sections
+from cores.report_integrity import source_contract, validate_sections, IncompleteReportError
 from prism_core.ai_models import REPORT_STAGES
 from prism_core.inference_errors import should_retry
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, retry_if_exception
 from cores.agents.report_agent import ReportAgent
 from report_model_config import REPORT_EFFORT, REPORT_MODEL
 from cores.openai_error_logging import log_openai_error
@@ -27,13 +27,31 @@ LANGUAGE_NAMES = {
 }
 
 
-@retry(
-    stop=stop_after_attempt(2),  # Maximum 2 attempts (initial + 1 retry)
-    wait=wait_exponential(multiplier=1, min=10, max=30),  # Exponentially increasing wait time
-    retry=retry_if_exception(should_retry),
-    reraise=True
-)
 async def generate_report(agent, section, company_name, company_code, reference_date, logger, language="ko"):
+    correction = ''
+    async for attempt in AsyncRetrying(
+        stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=30),
+        retry=retry_if_exception(should_retry), reraise=True,
+    ):
+        with attempt:
+            try:
+                return await _generate_report_once(agent, section, company_name, company_code,
+                                                   reference_date, logger, language, correction)
+            except IncompleteReportError as exc:
+                # Categories only: never put raw failed text or secrets in logs/correction.
+                logger.warning('Report validation failed: section=%s attempt=%d reasons=%s',
+                               section, attempt.retry_state.attempt_number, exc.reasons)
+                correction = ('\nPrevious report rejected: ' + str(exc) +
+                              '\nRecheck the same company and ticker using an independent source '
+                              '(issuer IR or DART if WiseReport is unavailable). Cite verified sources. '
+                              'Return a substantive report only if evidence supports it. Never replace '
+                              'missing facts with guesses; retain REPORT_DATA_UNAVAILABLE if no '
+                              'substantive evidence can be verified.\n')
+                raise
+
+
+async def _generate_report_once(agent, section, company_name, company_code, reference_date,
+                                logger, language="ko", correction=''):
     """
     Generate report using agent with retry logic
 
@@ -113,7 +131,7 @@ async def generate_report(agent, section, company_name, company_code, reference_
     try:
         report = await _generate_agent_text(
             agent,
-            message + source_contract(company_name, company_code, reference_date),
+            message + source_contract(company_name, company_code, reference_date) + correction,
             stage=REPORT_STAGES[section],
             max_tokens=32000,
             max_iterations=10,
