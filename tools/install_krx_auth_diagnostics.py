@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = '# PRISM KRX authentication diagnostics v1'
 # First deployed diagnostic patch, supported for the redaction upgrade below.
 PREVIOUS_PATCH_SHA256 = '6b1b99098a0d31c9c8c17cd2a9d54b1064f6bd3a672ba190df36fdc0e6b4a6aa'
+PREVIOUS_NAVIGATION_SHA256 = 'e7d479e9c99ce1c003347f70c2f29bf33574a6b2e9e47310c3a63fe8a4fa322b'
 PREVIOUS_LOGOUT_SHA256 = '24c2cf6b0111ddfa4182a09c6166dc96531b8913b80556c9fd9b9d1885ced309'
 PREVIOUS_RECOVERY_SHA256 = 'c3ef258f0e3c9dbecce739fe2a8c5a7c98d73f9b63537300b3bc2126e18497f9'
 PREVIOUS_REDACTION_SHA256 = '90585e28092577e992a1591c7ea64db5a43cfd56c5909b041170a6b650ea0269'
@@ -33,7 +34,7 @@ def patched_source(source):
         raise ValueError('Unsupported KRX dependency hash; no files changed')
     source = replace_once(source, 'import requests\n',
         f'{MARKER}\nfrom prism_krx_auth_diagnostics import (AuthDiagnostics, validation_response, redact,\n'
-        '    auth_retry_remaining, mark_auth_failure, clear_auth_failure)\n\nimport requests\n')
+        '    auth_retry_remaining, mark_auth_failure, clear_auth_failure, navigate_auth_page)\n\nimport requests\n')
     source = replace_once(source, '            # 응답이 비어있거나 HTML인 경우 (로그인 필요)\n',
         '            if "text/html" in resp.headers.get("Content-Type", "") or resp.status_code >= 400:\n'
         '                validation_response(logger, resp)\n\n'
@@ -122,6 +123,10 @@ def patched_source(source):
         '            raise KRXAuthError(f"KRX 직접 로그인 실패: {redact(e, diag.secrets)}") from None')
     method = replace_once(method, '        finally:\n            await self._cleanup_browser()\n',
         '        finally:\n            await diag.close()\n            await self._cleanup_browser()\n')
+    for url_name in ('logout_url', 'login_url', 'home_url', 'data_page_url'):
+        method = replace_once(method,
+            f'await page.goto({url_name}, wait_until="networkidle", timeout=self.PAGE_LOAD_TIMEOUT)',
+            f'await navigate_auth_page(page, {url_name}, timeout=self.PAGE_LOAD_TIMEOUT)')
     source = source[:start] + method + source[end:]
     # The dependency previously printed complete JavaScript cookie values.
     source = source.replace(
@@ -155,7 +160,7 @@ def main():
     current = target.read_bytes()
     original = backup.read_bytes() if MARKER.encode() in current else current
     expected = patched_source(original.decode()).encode()
-    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256, PREVIOUS_RECOVERY_SHA256, PREVIOUS_LOGOUT_SHA256}:
+    if current not in (original, expected) and hashlib.sha256(current).hexdigest() not in {PREVIOUS_NAVIGATION_SHA256, PREVIOUS_PATCH_SHA256, PREVIOUS_REDACTION_SHA256, PREVIOUS_RECOVERY_SHA256, PREVIOUS_LOGOUT_SHA256}:
         raise SystemExit('Existing patch differs; no files changed')
     helper = target.with_name('prism_krx_auth_diagnostics.py')
     helper_data = (ROOT / 'patches/krx/auth_diagnostics.py').read_bytes()

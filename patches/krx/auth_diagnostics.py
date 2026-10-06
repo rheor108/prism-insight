@@ -235,3 +235,13 @@ def clear_auth_failure(manager):
         _retry_path(manager).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+async def navigate_auth_page(page, url, *, timeout):
+    """Do not wait for background traffic; reject HTTP failures before credentials."""
+    response = await page.goto(url, wait_until='domcontentloaded', timeout=timeout)
+    if response is None:
+        raise RuntimeError('[KRX_NAVIGATION_NO_RESPONSE] authentication unknown')
+    if response.status >= 400:
+        raise RuntimeError(f'[KRX_NAVIGATION_HTTP] status={response.status}; authentication unknown')
+    return response

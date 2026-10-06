@@ -79,7 +79,7 @@ jobs:
         run: |
           python -m pytest cores/llm/tests/ -q
           python -m pytest --noconftest tests/test_research_quality.py -q
-          python -m pytest --noconftest tests/test_output_contract_recovery.py tests/test_claude_subscription.py -q
+          python -m pytest --noconftest tests/test_output_contract_recovery.py tests/test_claude_subscription.py tests/test_reproduced_failures.py -q
           # Entry-quality capture is observation-only and market-isolated.
           python -m pytest --noconftest \
             tests/test_observability_insights_export.py \
