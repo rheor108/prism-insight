@@ -20,7 +20,7 @@ class Verdict(BaseModel):
 def test_evaluation_schema_checks_nested_fields_and_tool_turns():
     schema = claude.output_schema(Verdict.model_json_schema())
     claude.validate_envelope({'answer': {'rating': 2, 'needs_improvement': True, 'detail': {'feedback': 'revise'}}, 'calls': []}, schema)
-    claude.validate_envelope({'answer': '', 'calls': [{'name': 'read', 'arguments': '{}'}]}, schema)
+    claude.validate_envelope({'answer': None, 'calls': [{'name': 'read', 'arguments': '{}'}]}, schema)
     for answer in ['', '{"rating":2}', {'rating': 2}, {'rating': 2, 'needs_improvement': True, 'detail': {}}]:
         with pytest.raises(ValidationError):
             claude.validate_envelope({'answer': answer, 'calls': []}, schema)

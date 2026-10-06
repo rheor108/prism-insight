@@ -123,6 +123,7 @@ async def test_patched_real_login_captures_before_browser_cleanup(monkeypatch, c
         page.url = ('https://data.krx.co.kr/MDCCOMS001.cmd?session=hidden'
                     if 'menuId=' in url else url)
         page.frames[0].url = page.url
+        return SimpleNamespace(status=200)
 
     page.goto = goto
     context = page.context

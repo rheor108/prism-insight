@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 log = logging.getLogger(__name__)
+MAX_COLLECTED_CLAIMS = 64
+REVIEW_BATCH_SIZE = 16
 Status = Literal['SUPPORTED', 'NOT_FOUND', 'ACCESS_FAILED', 'NOT_DISCLOSED', 'CONFLICTED', 'UNVERIFIED']
 
 
@@ -45,7 +47,7 @@ class ResearchPacket(BaseModel):
     model_config = ConfigDict(extra='forbid')
     as_of: date
     window_start: date | None
-    claims: list[Claim] = Field(min_length=1, max_length=16)
+    claims: list[Claim] = Field(min_length=1, max_length=MAX_COLLECTED_CLAIMS)
 
 
 class ReviewedItem(BaseModel):
@@ -57,10 +59,10 @@ class ReviewedItem(BaseModel):
 
 class ResearchReview(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    claims: list[ReviewedItem] = Field(min_length=1, max_length=16)
+    claims: list[ReviewedItem] = Field(min_length=1, max_length=REVIEW_BATCH_SIZE)
 
 
-COLLECT = '''Collect evidence for the user's requested items, not an expansive essay.
+COLLECT = f'''Return at most {MAX_COLLECTED_CLAIMS} claims. Collect evidence for the user's requested items, not an expansive essay.
 Use the reference date explicitly requested in the query; otherwise use today's date.
 Set window_start only for an explicitly requested publication-date window (e.g. past 7 days),
 not for an earnings/fiscal period. Distinguish event date, publication date and fiscal period.
@@ -220,8 +222,11 @@ async def research(raw_runner, instruction, message) -> str:
         raise ValueError('invalid research publication window')
     if len({c.id for c in packet.claims}) != len(packet.claims):
         raise ValueError('duplicate research item IDs')
-    initial = checked_claims(packet, ResearchReview(claims=[
-        ReviewedItem(id=c.id, action='accept') for c in packet.claims]))
+    initial = []
+    for start in range(0, len(packet.claims), REVIEW_BATCH_SIZE):
+        batch = packet.model_copy(update={'claims': packet.claims[start:start + REVIEW_BATCH_SIZE]})
+        initial.extend(checked_claims(batch, ResearchReview(claims=[
+            ReviewedItem(id=c.id, action='accept') for c in batch.claims])))
     # A model's official-source label is not an authenticity guarantee. Always
     # apply deterministic checks, and spend the extra search pass on weak evidence.
     targets = {c.id for c in initial if mode == 'all' or c.status != 'SUPPORTED'
@@ -229,17 +234,21 @@ async def research(raw_runner, instruction, message) -> str:
     if not targets:
         log.info('[RESEARCH_QUALITY] items=%d supported=%d review_items=0', len(initial), len(initial))
         return render(packet, initial)
-    candidates = packet.model_copy(update={'claims': [c for c in packet.claims if c.id in targets]})
-    try:
-        raw_review = await raw_runner('research', VERIFY, {
-            'query': message, 'task_instructions': instruction,
-            'candidate_evidence': candidates.model_dump(mode='json'),
-        }, web_search=True, response_model=ResearchReview)
-        reviewed = checked_claims(candidates, ResearchReview.model_validate_json(raw_review))
-    except (RuntimeError, ValueError):
-        # Never release an unchecked draft as verified evidence; preserve cancellation/timeouts.
-        log.warning('[RESEARCH_QUALITY] review_unavailable')
-        reviewed = [c.model_copy(update={'status': 'UNVERIFIED', 'sources': []}) for c in candidates.claims]
+    target_claims = [c for c in packet.claims if c.id in targets]
+    reviewed = []
+    # Keep every requested item, while bounding each sequential review request.
+    for start in range(0, len(target_claims), REVIEW_BATCH_SIZE):
+        candidates = packet.model_copy(update={'claims': target_claims[start:start + REVIEW_BATCH_SIZE]})
+        try:
+            raw_review = await raw_runner('research', VERIFY, {
+                'query': message, 'task_instructions': instruction,
+                'candidate_evidence': candidates.model_dump(mode='json'),
+            }, web_search=True, response_model=ResearchReview)
+            reviewed.extend(checked_claims(candidates, ResearchReview.model_validate_json(raw_review)))
+        except (RuntimeError, ValueError):
+            log.warning('[RESEARCH_QUALITY] review_unavailable')
+            reviewed.extend(c.model_copy(update={'status': 'UNVERIFIED', 'sources': []})
+                            for c in candidates.claims)
     by_id = {c.id: c for c in reviewed}
     claims = [by_id.get(c.id, c) for c in initial]
     log.info('[RESEARCH_QUALITY] items=%d supported=%d unresolved=%d review_items=%d', len(claims),
