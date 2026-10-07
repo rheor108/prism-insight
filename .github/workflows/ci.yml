@@ -65,6 +65,7 @@ jobs:
           pip install \
             pydantic \
             jsonschema \
+            tabulate \
             "async-timeout>=5,<6; python_version < '3.11'" \
             pyyaml \
             "openai>=2.9,<3" \
@@ -79,6 +80,7 @@ jobs:
         run: |
           python -m pytest cores/llm/tests/ -q
           python -m pytest --noconftest tests/test_research_quality.py -q
+          python -m pytest --noconftest tests/test_report_data_timing.py tests/test_data_prefetch_metadata.py -q
           python -m pytest --noconftest tests/test_output_contract_recovery.py tests/test_claude_subscription.py tests/test_reproduced_failures.py tests/test_claude_quality_reviewer.py -q
           # Entry-quality capture is observation-only and market-isolated.
           python -m pytest --noconftest \
