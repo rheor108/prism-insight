@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -34,47 +35,119 @@ def command():
             '--output-format', 'json', '--system-prompt', SYSTEM]
 
 
+class ReviewError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        self.attempts = []
+        super().__init__(code)
+
+
+def classify_failure(stdout, stderr):
+    # Only fixed categories escape this function; never raw evidence or errors.
+    text = stderr
+    try:
+        result = json.loads(stdout)
+        if isinstance(result, dict) and result.get('is_error'):
+            text += str(result.get('result', '')) + str(result.get('errors', ''))
+    except ValueError:
+        pass
+    for code, pattern in [
+        ('oauth_refresh_busy', r'Failed to refresh OAuth token: another Claude Code process'),
+        ('authentication', r'not logged in|authentication|oauth|401|login required'),
+        ('quota', r'usage limit|rate.?limit|429|quota'),
+        ('model_unavailable', r'model_not_found|invalid model|model.{0,60}(not found|does not exist)'),
+        ('context_limit', r'prompt is too long|context.{0,20}(limit|length)|too many tokens'),
+        ('connection', r'ECONN|ENOTFOUND|timed out|503|overloaded'),
+    ]:
+        if re.search(pattern, text, re.I):
+            return ReviewError(code)
+    return ReviewError('provider_error')
+
+
 def validate(result):
-    if result.get('is_error') or not result.get('result', '').strip():
-        raise ValueError('Claude review failed')
+    if not isinstance(result, dict):
+        raise ReviewError('invalid_response')
+    if result.get('is_error'):
+        raise classify_failure(json.dumps(result), '')
+    if not isinstance(result.get('result'), str) or not result['result'].strip():
+        raise ReviewError('empty_report')
     used = result.get('modelUsage', {})
     # Claude Code may separately bill its built-in Haiku helper. The requested
     # reviewer must actually appear; any other main-model usage fails closed.
+    if not isinstance(used, dict):
+        raise ReviewError('model_unverified')
     if not any(name == MODEL or name.startswith(MODEL + '-') for name in used) or any(
             not (name == MODEL or name.startswith(MODEL + '-') or name.startswith('claude-haiku-'))
             for name in used):
-        raise ValueError('Unexpected or unverified reviewer model')
+        raise ReviewError('model_unverified')
 
 
 def run(evidence):
     env = environment()
-    with tempfile.TemporaryDirectory(prefix='prism-quality-') as folder:
-        auth = subprocess.run(['claude', 'auth', 'status'], env=env, cwd=folder,
-                              capture_output=True, text=True, timeout=20)
-        state = json.loads(auth.stdout)
-        if not state.get('loggedIn') or state.get('authMethod') != 'claude.ai':
-            raise ValueError('Claude subscription login required; no API fallback')
-        start = time.monotonic()
-        p = subprocess.Popen(command(), env=env, cwd=folder, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             start_new_session=True)
-        try:
-            stdout, _ = p.communicate(evidence, timeout=2400)
-            if p.returncode != 0:
-                raise ValueError('Claude process failed; raw errors suppressed')
-            result = json.loads(stdout)
-            validate(result)
-            return {'reviewer_model': MODEL, 'effort': 'max',
-                    'duration_seconds': round(time.monotonic()-start, 3),
-                    'report': result['result'], 'model_usage': result['modelUsage']}
-        finally:
-            if p.poll() is None:
-                os.killpg(p.pid, signal.SIGTERM)
+    started = time.monotonic()
+    deadline = started + 2400
+    attempts = []
+    try:
+        with tempfile.TemporaryDirectory(prefix='prism-quality-') as folder:
+            auth = subprocess.run(['claude', 'auth', 'status'], env=env, cwd=folder,
+                                  capture_output=True, text=True, timeout=20)
+            try:
+                state = json.loads(auth.stdout)
+            except ValueError:
+                raise ReviewError('auth_status_invalid') from None
+            if auth.returncode or not isinstance(state, dict) or not state.get('loggedIn') or state.get('authMethod') != 'claude.ai':
+                raise ReviewError('authentication')
+            for attempt in range(1, 3):
+                start = time.monotonic()
+                p = subprocess.Popen(command(), env=env, cwd=folder, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     start_new_session=True)
+                error = None
                 try:
-                    p.wait(timeout=3)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ReviewError('timeout')
+                    stdout, stderr = p.communicate(evidence, timeout=remaining)
+                    if p.returncode != 0:
+                        raise classify_failure(stdout, stderr)
+                    try:
+                        result = json.loads(stdout)
+                    except ValueError:
+                        raise ReviewError('invalid_json') from None
+                    validate(result)
                 except subprocess.TimeoutExpired:
-                    os.killpg(p.pid, signal.SIGKILL)
-                    p.wait()
+                    error = ReviewError('timeout')
+                except ReviewError as exc:
+                    error = exc
+                finally:
+                    if p.poll() is None:
+                        os.killpg(p.pid, signal.SIGTERM)
+                        try:
+                            p.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(p.pid, signal.SIGKILL)
+                            p.wait()
+                attempts.append({'attempt': attempt, 'status': 'failed' if error else 'success',
+                                 'error_code': error.code if error else None,
+                                 'duration_seconds': round(time.monotonic()-start, 3)})
+                if error is None:
+                    return {'status': 'success', 'reviewer_model': MODEL, 'effort': 'max',
+                            'duration_seconds': round(time.monotonic()-started, 3),
+                            'attempts': attempts, 'report': result['result'],
+                            'model_usage': result['modelUsage']}
+                if error.code != 'oauth_refresh_busy' or attempt == 2:
+                    raise error
+                if deadline - time.monotonic() <= 60:
+                    raise ReviewError('timeout')
+                # This standalone CLI waits; no parent tools/orders are replayed.
+                time.sleep(60)
+    except subprocess.TimeoutExpired:
+        error = ReviewError('timeout')
+        error.attempts = attempts
+        raise error from None
+    except ReviewError as error:
+        error.attempts = attempts
+        raise
 
 
 def main():
@@ -84,14 +157,25 @@ def main():
     args = parser.parse_args()
     try:
         if args.output_file.exists():
-            raise ValueError('Output already exists')
+            raise ReviewError('output_exists')
         result = run(args.evidence_file.read_text())
         with args.output_file.open('x', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         os.chmod(args.output_file, 0o600)
         print(json.dumps({'status': 'success', 'model': MODEL, 'effort': 'max'}))
-    except Exception:
-        print('{"status":"review_failed","fallback":false}')
+    except Exception as exc:
+        failure = {'status': 'review_failed', 'fallback': False,
+                   'error_code': exc.code if isinstance(exc, ReviewError) else 'local_execution',
+                   'attempts': getattr(exc, 'attempts', [])}
+        # Preserve prior reports and failure evidence; no raw provider text.
+        sidecar = args.output_file.with_name(args.output_file.name + '.failure.json')
+        try:
+            fd = os.open(sidecar, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(failure, stream, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+        print(json.dumps(failure))
         raise SystemExit(1)
 
 
