@@ -1,3 +1,4 @@
+from cores.report_data_timing import report_timing_rules
 from cores.agents.report_agent import ReportAgent as Agent
 
 
@@ -313,6 +314,8 @@ def create_market_index_analysis_agent(reference_date, max_years_ago, max_years,
         server_list = ["perplexity"]
     else:
         server_list = ["kospi_kosdaq", "perplexity"]
+
+    instruction += report_timing_rules(language)
 
     return Agent(
         name="market_index_analysis_agent",

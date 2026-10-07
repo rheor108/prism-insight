@@ -13,13 +13,15 @@ This mirrors the US module's pattern (us_data_client.py direct import).
 
 import logging
 
+from cores.report_data_timing import now_kst, row_status, timing_note
+
 import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 
-def _dict_to_markdown(data: dict, title: str = "") -> str:
+def _dict_to_markdown(data: dict, title: str = "", *, ohlcv_retrieved_at=None) -> str:
     """Convert MCP server's dict response to markdown table string.
 
     The kospi_kosdaq MCP server functions return Dict[str, Any] with date keys.
@@ -42,6 +44,8 @@ def _dict_to_markdown(data: dict, title: str = "") -> str:
         return ""
 
     df.index.name = "Date"
+    if ohlcv_retrieved_at is not None:
+        df["Bar status"] = [row_status(key, ohlcv_retrieved_at) for key in df.index]
 
     result = ""
     if title:
@@ -49,6 +53,9 @@ def _dict_to_markdown(data: dict, title: str = "") -> str:
 
     if metadata and metadata.get("note"):
         result += f"> **데이터 상태:** {metadata['note']}\n\n"
+
+    if ohlcv_retrieved_at is not None:
+        result += timing_note(ohlcv_retrieved_at)
 
     result += df.to_markdown(index=True) + "\n"
     return result
@@ -86,7 +93,7 @@ def prefetch_stock_ohlcv(company_code: str, start_date: str, end_date: str) -> s
 
         data = server.get_stock_ohlcv(start_date, end_date, company_code)
 
-        return _dict_to_markdown(data, f"Stock OHLCV: {company_code} ({start_date}~{end_date})")
+        return _dict_to_markdown(data, f"Stock OHLCV: {company_code} ({start_date}~{end_date})", ohlcv_retrieved_at=now_kst())
     except Exception as e:
         logger.error(f"Error prefetching OHLCV for {company_code}: {e}")
         return ""
@@ -136,7 +143,7 @@ def prefetch_index_ohlcv(index_ticker: str, start_date: str, end_date: str) -> s
 
         data = server.get_index_ohlcv(start_date, end_date, index_ticker)
 
-        return _dict_to_markdown(data, f"{index_name} Index ({start_date}~{end_date})")
+        return _dict_to_markdown(data, f"{index_name} Index ({start_date}~{end_date})", ohlcv_retrieved_at=now_kst())
     except Exception as e:
         logger.error(f"Error prefetching index OHLCV for {index_ticker}: {e}")
         return ""

@@ -1,3 +1,4 @@
+from cores.report_data_timing import report_timing_rules
 from cores.agents.report_agent import ReportAgent as Agent
 
 def create_price_volume_analysis_agent(company_name, company_code, reference_date, max_years_ago, max_years, language: str = "ko", prefetched_data: str = None):
@@ -155,6 +156,8 @@ def create_price_volume_analysis_agent(company_name, company_code, reference_dat
         # Also update precautions to not require tool calls
         instruction = instruction.replace("- 반드시 tool call을 해야 합니다", "- 사전 수집된 데이터를 기반으로 분석합니다")
         instruction = instruction.replace("- You must make a tool call", "- Analyze based on the pre-collected data provided above")
+
+    instruction += report_timing_rules(language)
 
     return Agent(
         name="price_volume_analysis_agent",
